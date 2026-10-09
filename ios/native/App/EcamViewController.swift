@@ -5,5 +5,9 @@ import Capacitor
 class EcamViewController: CAPBridgeViewController {
     override func capacitorDidLoad() {
         bridge?.registerPluginInstance(RecorderPlugin())
+        // Comportement iOS : glisser depuis le bord gauche = retour, pas de rebond de la page entière
+        webView?.allowsBackForwardNavigationGestures = true
+        webView?.scrollView.bounces = false
+        webView?.scrollView.contentInsetAdjustmentBehavior = .never
     }
 }

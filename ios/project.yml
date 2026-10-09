@@ -20,6 +20,7 @@ targets:
         buildPhase: resources
       - path: native/Resources/capacitor.config.json
         buildPhase: resources
+      - native/Resources/Assets.xcassets
     info:
       path: native/App/Info.plist
       properties:
@@ -34,6 +35,7 @@ targets:
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: fr.cyprien.ecam
+      ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       TARGETED_DEVICE_FAMILY: "1,2"
       CODE_SIGNING_ALLOWED: NO   # SideStore signe l'app à l'installation
     dependencies:

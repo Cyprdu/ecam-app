@@ -868,6 +868,80 @@ function taskSheet(t) {
   });
 }
 
+// ---------- App iPhone native (coque SideStore) : enregistreur intégré, haptique ----------
+const NATIVE = window.Capacitor?.isNativePlatform?.() ? window.Capacitor.Plugins?.EcamRecorder : null;
+if (NATIVE) document.documentElement.classList.add('native');
+const haptic = (style = 'light') => NATIVE?.haptic({ style }).catch(() => {});
+
+async function recordNative(ev) {
+  try {
+    await api('/arm', { method: 'POST', json: ev }); // le cours qui recevra l'enregistrement
+    await NATIVE.start({ course: ev.subject, uploadUrl: await linkFor('upload') });
+    haptic('success');
+    recSheet();
+    recBar();
+  } catch (e) { toast(e.message || 'Enregistrement impossible'); }
+}
+
+const fmtTime = (s) => { s = Math.floor(s); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(s % 60).padStart(2, '0'); };
+
+// Écran d'enregistrement : chrono, Pause / Reprendre, Arrêter et envoyer
+function recSheet() {
+  openSheet(`<div class="rec-sheet">
+      <div class="rec-dot" id="r-dot"></div>
+      <div class="rec-course" id="r-course"></div>
+      <div class="rec-time" id="r-time">0:00</div>
+      <p class="note" style="text-align:center">Tu peux verrouiller l’écran ou changer d’app : l’enregistrement continue (Dynamic Island).</p>
+      <div class="rec-buttons">
+        <button class="rec-btn" id="r-pause" aria-label="Pause">${icon('clock')}<span>Pause</span></button>
+        <button class="rec-btn stop" id="r-stop" aria-label="Arrêter et envoyer"><i></i><span>Arrêter et envoyer</span></button>
+      </div>
+    </div>`, (sh) => {
+    const update = async () => {
+      if (sh.hidden) return clearInterval(tick);
+      const s = await NATIVE.status();
+      if (!s.active) { clearInterval(tick); return closeSheet(); }
+      $('#r-course', sh).textContent = s.course;
+      $('#r-time', sh).textContent = fmtTime(s.seconds);
+      $('#r-dot', sh).classList.toggle('paused', !s.recording);
+      $('#r-pause span', sh).textContent = s.recording ? 'Pause' : 'Reprendre';
+    };
+    const tick = setInterval(update, 500);
+    update();
+    $('#r-pause', sh).onclick = async () => { haptic('medium'); (await NATIVE.status()).recording ? await NATIVE.pause() : await NATIVE.resume(); update(); };
+    $('#r-stop', sh).onclick = async () => {
+      haptic('success'); clearInterval(tick);
+      try { await NATIVE.stop(); toast('Envoi en cours — tu seras notifié'); } catch (e) { toast(e.message); }
+      closeSheet(); recBar();
+    };
+  });
+}
+
+// Bandeau « enregistrement en cours » en haut de l'app (tant qu'un enregistrement tourne)
+async function recBar() {
+  if (!NATIVE) return;
+  let bar = $('#rec-bar');
+  const s = await NATIVE.status().catch(() => ({}));
+  if (!s.active) { bar?.remove(); return; }
+  if (!bar) {
+    bar = document.createElement('button');
+    bar.id = 'rec-bar';
+    bar.onclick = () => { haptic(); recSheet(); };
+    document.body.appendChild(bar);
+    const t = setInterval(async () => {
+      const st = await NATIVE.status().catch(() => ({}));
+      if (!st.active) { clearInterval(t); bar.remove(); return; }
+      bar.innerHTML = `<i class="${st.recording ? '' : 'paused'}"></i>${esc(st.course)} · ${fmtTime(st.seconds)}`;
+    }, 1000);
+  }
+}
+if (NATIVE) {
+  recBar();
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) recBar(); });
+  // Petit retour haptique sur les éléments qu'on touche, comme une app iOS
+  document.addEventListener('click', (e) => { if (e.target.closest('.btn, .action, .tabbar a, .day, .seg button, .seg a, .icon-btn, .pick, .switch, [data-done]')) haptic(e.target.closest('.day, .seg button, .seg a, .tabbar a') ? 'selection' : 'light'); }, true);
+}
+
 async function record(ev) {
   try { await api('/arm', { method: 'POST', json: ev }); } catch (e) { return toast(e.message); }
   location.href = 'shortcuts://run-shortcut?name=' + encodeURIComponent(SHORTCUT_REC);
@@ -974,6 +1048,7 @@ function goDay(day) {
 }
 function slideTo(dir) {
   const track = $('#track');
+  haptic('selection');
   sliding = true;
   track.style.transition = 'transform .34s cubic-bezier(.2, .8, .2, 1)';
   track.style.transform = `translateX(${dir > 0 ? -66.6667 : 0}%)`;
@@ -1066,7 +1141,7 @@ function bind(route, arg) {
   const on = (id, fn) => { const el = $('#' + id, view); if (el) el.onclick = fn; };
 
   const ev = route === 'cours' && findEvent(arg);
-  on('rec', () => (store.get('recReady') ? record(ev) : recGuide(ev)));
+  on('rec', () => (NATIVE ? recordNative(ev) : store.get('recReady') ? record(ev) : recGuide(ev)));
   on('rec-guide', () => recGuide());
   on('fiche-now', async () => {
     try { await api('/courses/fiche', { method: 'POST', json: { uid: ev.uid } }); toast('C’est parti : la fiche se fait dès que ton PC est allumé'); refresh(); }
@@ -1128,6 +1203,7 @@ document.addEventListener('touchmove', (e) => { if (e.touches.length > 1) e.prev
 // Glisser depuis le bord gauche = retour, comme sur iOS (pages de détail uniquement)
 let swipe = null;
 addEventListener('touchstart', (e) => {
+  if (NATIVE) return; // dans l'app iPhone, c'est le geste natif d'iOS qui fait le retour
   const t = e.touches[0];
   swipe = t.clientX < 24 && /^#(cours|matiere|fiche|reglages)/.test(location.hash) ? { x: t.clientX, y: t.clientY } : null;
 }, { passive: true });

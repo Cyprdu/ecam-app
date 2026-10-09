@@ -1,6 +1,7 @@
 import AVFoundation
 import Capacitor
 import Foundation
+import UIKit
 
 // Pont entre l'app web et l'enregistreur natif.
 // Côté JavaScript : const r = window.Capacitor.Plugins.EcamRecorder
@@ -16,7 +17,23 @@ public class RecorderPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "resume", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stop", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "status", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "haptic", returnType: CAPPluginReturnPromise),
     ]
+
+    // Retour haptique iOS (vibration légère au toucher, réussite…)
+    @objc func haptic(_ call: CAPPluginCall) {
+        let style = call.getString("style") ?? "light"
+        DispatchQueue.main.async {
+            switch style {
+            case "success": UINotificationFeedbackGenerator().notificationOccurred(.success)
+            case "warning": UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            case "selection": UISelectionFeedbackGenerator().selectionChanged()
+            case "medium": UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            default: UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            }
+            call.resolve()
+        }
+    }
 
     @objc func start(_ call: CAPPluginCall) {
         guard let raw = call.getString("uploadUrl"), let url = URL(string: raw) else { return call.reject("uploadUrl manquant") }

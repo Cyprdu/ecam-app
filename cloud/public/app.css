@@ -422,3 +422,24 @@ body.offline::before {
   content: "Hors ligne"; position: fixed; z-index: 40; top: calc(var(--top) + 8px); left: 50%; transform: translateX(-50%);
   padding: 5px 12px; border-radius: 99px; background: var(--ink); color: var(--on-ink); font-size: 12px; font-weight: 650; opacity: .85; pointer-events: none;
 }
+
+/* ---------- App iPhone native ---------- */
+.native .rec-only-web { display: none; }
+.rec-sheet { display: flex; flex-direction: column; align-items: center; padding: 10px 0 4px; }
+.rec-dot { width: 14px; height: 14px; border-radius: 50%; background: #ff3b30; animation: pulse 1.4s ease-in-out infinite; }
+.rec-dot.paused { background: var(--muted); animation: none; }
+.rec-course { margin-top: 14px; font-weight: 650; text-align: center; color: var(--muted); }
+.rec-time { font-size: 64px; font-weight: 300; letter-spacing: -.04em; font-variant-numeric: tabular-nums; margin: 6px 0 10px; }
+.rec-buttons { display: flex; gap: 34px; margin: 14px 0 8px; }
+.rec-btn { display: flex; flex-direction: column; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.rec-btn > svg { width: 64px; height: 64px; padding: 20px; border-radius: 50%; background: var(--fill); color: var(--text); }
+.rec-btn.stop i { width: 64px; height: 64px; border-radius: 50%; border: 4px solid var(--line); display: grid; place-items: center; position: relative; }
+.rec-btn.stop i::after { content: ""; width: 24px; height: 24px; border-radius: 6px; background: #ff3b30; }
+.rec-btn:active { transform: scale(.94); }
+#rec-bar {
+  position: fixed; z-index: 15; left: 50%; transform: translateX(-50%); top: calc(var(--top) + 6px);
+  display: flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 99px;
+  background: #ff3b30; color: #fff; font-size: 13px; font-weight: 650; box-shadow: 0 6px 20px rgba(255, 59, 48, .35); animation: toast .3s var(--ease);
+}
+#rec-bar i { width: 8px; height: 8px; border-radius: 50%; background: #fff; animation: pulse 1.4s ease-in-out infinite; }
+#rec-bar i.paused { animation: none; opacity: .5; }
