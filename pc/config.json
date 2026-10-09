@@ -1,0 +1,15 @@
+{
+  "cloud_url": "https://ecam-app.cyprien-veyret.workers.dev",
+  "ecam_dir": "C:/Users/cypri/Documents/ECAM",
+  "whisper_model": "large-v3",
+  "folders": {
+    "Outils Mathématiques Appliquées": "MATHÉMATIQUES",
+    "SI Industriels : architecture et production": "SI INDUSTRIEL - ARCHITECTURE ET PRODUCTION",
+    "Structure de l'entreprise et vie de l'entreprise": "STRUCTURE DE L'ENTREPRISE",
+    "Introduction aux systèmes d'information": "SYSTÈMES D'INFORMATION",
+    "Ethique et Droit en Cybersécurité 1": "ÉTHIQUE & DROIT"
+  },
+  "ignore": [
+    "SITE-APPRENTISSAGE"
+  ]
+}

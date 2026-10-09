@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS subjects (name TEXT PRIMARY KEY, hidden INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, subject TEXT, event_uid TEXT, name TEXT, kind TEXT, mime TEXT, size INTEGER, created TEXT, parent TEXT);
+CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, subject TEXT, event_uid TEXT, due TEXT, title TEXT, kind TEXT, done INTEGER DEFAULT 0, created TEXT, note TEXT, scope TEXT);
+CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, type TEXT, subject TEXT, event_uid TEXT, params TEXT, status TEXT, created TEXT, result_file TEXT);
+CREATE TABLE IF NOT EXISTS subs (endpoint TEXT PRIMARY KEY, p256dh TEXT, auth TEXT);
+CREATE TABLE IF NOT EXISTS sent (key TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS events (uid TEXT PRIMARY KEY, data TEXT);

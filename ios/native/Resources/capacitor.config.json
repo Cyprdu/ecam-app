@@ -1,0 +1,13 @@
+{
+  "appId": "fr.cyprien.ecam",
+  "appName": "ECAM",
+  "webDir": "public",
+  "server": {
+    "url": "https://ecam-app.cyprien-veyret.workers.dev",
+    "allowNavigation": ["ecam-app.cyprien-veyret.workers.dev", "claude.ai", "*.ecam.fr"]
+  },
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#0e0d0c"
+  }
+}

@@ -1,0 +1,62 @@
+# Projet Xcode décrit en texte : XcodeGen le génère sur le Mac de GitHub (pas besoin de Mac ici).
+name: ECAM
+options:
+  bundleIdPrefix: fr.cyprien
+  deploymentTarget:
+    iOS: "17.0"
+packages:
+  Capacitor:
+    url: https://github.com/ionic-team/capacitor-swift-pm.git
+    from: 7.0.0   # à ajuster à la dernière version au moment de la phase 2
+targets:
+  ECAM:
+    type: application
+    platform: iOS
+    sources:
+      - native/App
+      - native/Shared
+      - path: native/Resources/public
+        type: folder
+        buildPhase: resources
+      - path: native/Resources/capacitor.config.json
+        buildPhase: resources
+    info:
+      path: native/App/Info.plist
+      properties:
+        CFBundleDisplayName: ECAM
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        NSMicrophoneUsageDescription: "Pour enregistrer tes cours (ils sont transcrits et transformés en fiches)."
+        UIBackgroundModes: [audio, fetch]
+        NSSupportsLiveActivities: true
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: fr.cyprien.ecam
+      TARGETED_DEVICE_FAMILY: "1,2"
+      CODE_SIGNING_ALLOWED: NO   # SideStore signe l'app à l'installation
+    dependencies:
+      - package: Capacitor
+        product: Capacitor
+      - package: Capacitor
+        product: Cordova
+      - target: ECAMWidget
+  ECAMWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - native/Widget
+      - native/Shared
+    info:
+      path: native/Widget/Info.plist
+      properties:
+        CFBundleDisplayName: ECAM
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: fr.cyprien.ecam.widget
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: WIDGET_EXTENSION
+      CODE_SIGNING_ALLOWED: NO

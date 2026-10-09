@@ -1,0 +1,30 @@
+# Compile l'app iPhone sur un Mac de GitHub (gratuit) et fournit ECAM.ipa, non signée :
+# SideStore la signe à l'installation. Onglet Actions → « App iPhone » → Run workflow.
+name: App iPhone
+on:
+  workflow_dispatch:
+  push:
+    paths: ['ios/**']
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Projet Xcode
+        run: brew install xcodegen && cd ios && xcodegen generate
+      - name: Compilation
+        run: |
+          cd ios
+          xcodebuild -project ECAM.xcodeproj -scheme ECAM -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+      - name: Paquet .ipa
+        run: |
+          cd ios
+          mkdir -p Payload && cp -R build/Build/Products/Release-iphoneos/ECAM.app Payload/
+          zip -qry ECAM.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ECAM-ipa
+          path: ios/ECAM.ipa

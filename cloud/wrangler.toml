@@ -1,0 +1,29 @@
+name = "ecam-app"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+
+[assets]
+directory = "public"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ecam"
+database_id = "91659103-2c38-4817-bc17-48f1a23d4484"
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "ecam-files"
+
+[ai]
+binding = "AI"
+
+[triggers]
+crons = ["5,35 * * * *"]
+
+[vars]
+CLOUD_FALLBACK_HOURS = "12"
+ICS_URL = "https://calendar.ecam.fr/getICS?userid=B9695354-CAED-432E-B363-D15150515020"
+VAPID_SUB = "https://ecam-app.cyprien-veyret.workers.dev"
+VAPID_PUBLIC = "BIb2HGdNaD77Ye2fJrPGgRYdJ-bfV8YDhISqMR2UDyAM15uTVJEEtLuhoFxSu6p8SIfvzlSb5MPwNkUG_TbHZ8k"

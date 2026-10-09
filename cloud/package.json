@@ -1,0 +1,18 @@
+{
+  "name": "ecam-app",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {
+    "test": "node test/push.test.mjs && node test/ics.test.mjs && node test/ecam.test.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "web-push": "^3.6.7",
+    "wrangler": "^4.148.0"
+  }
+}

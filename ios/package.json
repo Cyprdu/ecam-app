@@ -1,0 +1,12 @@
+{
+  "name": "ecam-ios",
+  "private": true,
+  "description": "Coque iPhone native de l'app ECAM (voir PLAN.md)",
+  "scripts": {
+    "doctor": "cap doctor"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.6.9",
+    "@capacitor/core": "^7.6.9"
+  }
+}

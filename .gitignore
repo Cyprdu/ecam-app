@@ -1,0 +1,13 @@
+# Secrets et état local : ne partent jamais sur GitHub
+cloud/.dev.vars
+cloud/.wrangler/
+pc/.venv/
+pc/cache/
+pc/*.json
+!pc/config.json
+pc/agent.log
+**/node_modules/
+ios/build/
+ios/*.xcodeproj/
+ios/Payload/
+*.ipa
