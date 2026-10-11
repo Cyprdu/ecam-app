@@ -6,3 +6,7 @@ CREATE TABLE IF NOT EXISTS subs (endpoint TEXT PRIMARY KEY, p256dh TEXT, auth TE
 CREATE TABLE IF NOT EXISTS sent (key TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS events (uid TEXT PRIMARY KEY, data TEXT);
+-- Sans ces index, chaque « document → son texte / son résumé » relisait toute la table (quota de lectures D1 gratuit épuisé)
+CREATE INDEX IF NOT EXISTS files_parent ON files(parent, kind);
+CREATE INDEX IF NOT EXISTS files_subject ON files(subject);
+CREATE INDEX IF NOT EXISTS files_event ON files(event_uid);

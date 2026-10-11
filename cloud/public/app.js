@@ -38,6 +38,7 @@ async function refresh() {
     colorOrder = null;
     store.set('state', JSON.stringify(S));
     render(false);
+    dispatchEvent(new Event('ecam-state')); // l'app iPhone reprogramme ses rappels
     retryIn = 0;
   } catch (e) {
     // Mise à jour automatique : jamais de message, on réessaie un peu plus tard (5 s, 15 s, 1 min…)
@@ -99,13 +100,60 @@ const fileIcon = (f) => ({ audio: 'mic', fiche: 'sparkles', transcript: 'text' }
 const size = (n) => (n > 1e6 ? (n / 1e6).toFixed(1) + ' Mo' : Math.max(1, Math.round(n / 1e3)) + ' Ko');
 
 // ---------- Feuille modale ----------
+let sheetGen = 0; // une feuille rouverte pendant la fermeture de la précédente ne doit pas être cachée
+const sheetDocked = () => !matchMedia('(min-width: 1024px)').matches; // téléphone/tablette : feuille en bas d'écran
 function openSheet(html, onMount) {
-  const sh = $('#sheet');
-  sh.innerHTML = html; sh.hidden = false; $('#backdrop').hidden = false;
+  const sh = $('#sheet'), bd = $('#backdrop');
+  sheetGen++;
+  sh.classList.remove('closing'); bd.classList.remove('closing');
+  sh.style.transition = sh.style.transform = sh.style.opacity = bd.style.transition = bd.style.opacity = '';
+  sh.innerHTML = html; sh.hidden = false; bd.hidden = false; sh.scrollTop = 0;
   onMount?.(sh);
 }
-function closeSheet() { $('#sheet').hidden = true; $('#backdrop').hidden = true; }
+function closeSheet() {
+  const sh = $('#sheet'), bd = $('#backdrop');
+  if (sh.hidden || sh.classList.contains('closing')) return;
+  const gen = sheetGen;
+  sh.classList.add('closing'); bd.classList.add('closing');
+  if (sheetDocked()) { sh.style.transition = 'transform .3s cubic-bezier(.32, .72, 0, 1)'; sh.style.transform = 'translateY(100%)'; } else { sh.style.transition = 'opacity .2s'; sh.style.opacity = 0; }
+  bd.style.transition = 'opacity .3s'; bd.style.opacity = 0;
+  setTimeout(() => { if (gen === sheetGen) { sh.hidden = bd.hidden = true; sh.classList.remove('closing'); bd.classList.remove('closing'); sh.style.transition = sh.style.transform = sh.style.opacity = bd.style.transition = bd.style.opacity = ''; } }, 300);
+}
 $('#backdrop').onclick = closeSheet;
+
+// Glisser la feuille vers le bas pour la fermer : depuis la poignée, ou de n'importe où quand son contenu est tout en haut
+(() => {
+  const sh = $('#sheet'), bd = $('#backdrop');
+  let g = null;
+  sh.addEventListener('touchstart', (e) => {
+    if (!sheetDocked() || e.touches.length !== 1 || e.target.closest('input[type=range], textarea, select')) return (g = null);
+    const t = e.touches[0];
+    g = { y: t.clientY, x: t.clientX, last: t.clientY, t: Date.now(), v: 0, dy: 0, on: false, grip: t.clientY - sh.getBoundingClientRect().top < 40 };
+  }, { passive: true });
+  sh.addEventListener('touchmove', (e) => {
+    if (!g) return;
+    const t = e.touches[0], dy = t.clientY - g.y;
+    if (!g.on) {
+      if (Math.abs(t.clientX - g.x) > Math.abs(dy) && !g.grip) return (g = null); // geste horizontal : pas pour nous
+      if (dy < 6 || (!g.grip && sh.scrollTop > 0)) { if (dy < -6 && !g.grip) g = null; return; }
+      g.on = true; g.y = t.clientY; sh.style.transition = bd.style.transition = 'none';
+    }
+    e.preventDefault();
+    const now = Date.now();
+    g.v = (t.clientY - g.last) / Math.max(1, now - g.t); g.last = t.clientY; g.t = now;
+    g.dy = Math.max(0, t.clientY - g.y) + Math.min(0, t.clientY - g.y) * 0.15; // vers le haut : léger élastique
+    sh.style.transform = `translateY(${g.dy}px)`;
+    bd.style.opacity = Math.max(0, 1 - g.dy / sh.offsetHeight);
+  }, { passive: false });
+  const end = () => {
+    if (!g?.on) return (g = null);
+    const { dy, v } = g; g = null;
+    if (dy > Math.min(140, sh.offsetHeight * 0.3) || (v > 0.5 && dy > 20)) { haptic('light'); closeSheet(); return; }
+    sh.style.transition = 'transform .38s cubic-bezier(.32, .72, 0, 1)'; bd.style.transition = 'opacity .38s';
+    sh.style.transform = 'translateY(0)'; bd.style.opacity = '';
+  };
+  sh.addEventListener('touchend', end); sh.addEventListener('touchcancel', end);
+})();
 
 // ---------- Vues ----------
 function vLogin() {
@@ -180,14 +228,21 @@ function agendaHead() {
       </div></div>`;
 }
 
-// Contenu d'un jour : ses cours, puis les rappels de sa semaine
+// Vacances de l'ECAM (dates données par l'étudiant : le calendrier ECAM ne les contient pas)
+const VACANCES = [['2026-10-24', '2026-11-01', 'Vacances de la Toussaint']];
+const vacationOf = (day) => VACANCES.find(([a, b]) => day >= a && day <= b);
+const longDay = (d) => dFmt(d, { weekday: 'long', day: 'numeric', month: 'long' });
+
+// Contenu d'un jour : ses cours, puis ses DS et devoirs (seulement ceux de ce jour-là)
 function dayPane(day) {
   const evs = S.events.filter((e) => e.start.startsWith(day));
-  const wStart = monday(day), wEnd = addDays(wStart, 6);
-  const thisWeek = wStart === monday(todayStr());
-  const soon = upcoming(3650).filter((r) => r.due >= (thisWeek ? nowStr() : wStart) && r.due.slice(0, 10) <= wEnd);
+  const shown = new Set(evs.map((e) => e.uid));
+  const dayItems = upcoming(3650).filter((r) => r.due.startsWith(day) && !(!r.isTask && shown.has(r.event_uid))); // un DS du calendrier a déjà sa carte
+  const items = dayItems.length ? `<div class="section-title">Ce jour-là</div><div class="list">${dayItems.map(reminderRow).join('')}</div>` : '';
+  const vac = !evs.length && vacationOf(day);
+  if (vac) return `<div class="empty vacation"><div class="vac-sun">${icon('sun')}</div><b>${vac[2]}</b><div class="note">Du ${longDay(vac[0])} au ${longDay(vac[1])}<br>Reprise le ${longDay(addDays(vac[1], 1))}</div></div>${items}`;
   return `${evs.length ? evs.map((e) => eventCard(e)).join('') : `<div class="empty">${icon('calendar')}<div>Aucun cours ce jour-là${day < (S.events[0]?.start || '') ? '<br><span class="note">Le calendrier ECAM ne contient pas les cours d’avant le ' + dFmt(S.events[0].start, { day: 'numeric', month: 'long' }) + '.</span>' : ''}</div></div>`}
-    ${soon.length ? `<div class="section-title">${thisWeek ? 'À venir cette semaine' : 'Semaine du ' + dFmt(wStart, { day: 'numeric', month: 'long' })}</div><div class="list">${soon.slice(0, 4).map(reminderRow).join('')}</div>` : ''}`;
+    ${items}`;
 }
 const panes = () => [-1, 0, 1].map((n) => `<div class="pane">${dayPane(addDays(selDay, n))}</div>`).join('');
 
@@ -201,7 +256,7 @@ function vAgenda() {
   let strip = '';
   for (const d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
     const ds = d.toLocaleDateString('sv-SE');
-    strip += `<button class="day ${ds === today ? 'today' : ''} ${ds === selDay ? 'sel' : ''} ${daysWithEv.has(ds) ? 'has' : ''}" data-day="${ds}"><small>${d.toLocaleDateString('fr-FR', { weekday: 'short' }).slice(0, 3)}</small><b>${d.getDate()}</b><i></i></button>`;
+    strip += `<button class="day ${ds === today ? 'today' : ''} ${ds === selDay ? 'sel' : ''} ${daysWithEv.has(ds) ? 'has' : ''} ${!daysWithEv.has(ds) && vacationOf(ds) ? 'vac' : ''}" data-day="${ds}"><small>${d.toLocaleDateString('fr-FR', { weekday: 'short' }).slice(0, 3)}</small><b>${d.getDate()}</b><i></i></button>`;
   }
   return `<div id="ag-head">${agendaHead()}</div>
     <div class="days-wrap"><button class="days-nav" data-week="-7" aria-label="Semaine précédente">${icon('chevron-left')}</button><div class="days" id="days">${strip}</div><button class="days-nav" data-week="7" aria-label="Semaine suivante">${icon('chevron-right')}</button></div>
@@ -380,16 +435,16 @@ const gb = (n) => (n < 1e9 ? Math.round(n / 1e6) + ' Mo' : (n / 1e9).toFixed(2).
 
 function vReglages() {
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
-  const perm = 'Notification' in window ? Notification.permission : 'unsupported';
+  const perm = NATIVE ? nativePerm : 'Notification' in window ? Notification.permission : 'unsupported';
   const seen = S.agentSeen ? Math.round((Date.now() - Date.parse(S.agentSeen)) / 60000) : null;
   const hidden = S.subjects.filter((s) => s.hidden);
   return `<a class="back" href="#ecam">${icon('chevron-left')}ECAM</a><div class="head"><div><h1>Réglages</h1></div></div>
     ${!standalone && /iPhone|iPad/.test(navigator.userAgent) ? `<div class="card" style="padding:14px;margin-bottom:8px"><b>Installer l'app</b><p class="note" style="margin:6px 0 0">Dans Safari : bouton Partager, puis « Sur l'écran d'accueil ». Les notifications ne marchent qu'une fois l'app installée.</p></div>` : ''}
     <div class="section-title">Notifications</div>
     <div class="list">
-      <div class="row"><span class="lead">${icon('bell')}</span><div class="grow"><div class="t">Rappels et fiches prêtes</div><div class="s">${perm === 'granted' ? 'Activées sur cet appareil' : perm === 'denied' ? 'Refusées — à réactiver dans Réglages iOS' : perm === 'unsupported' ? 'Installe l\'app pour les activer' : 'Désactivées'}</div></div></div>
+      <div class="row"><span class="lead">${icon('bell')}</span><div class="grow"><div class="t">Rappels et fiches prêtes</div><div class="s">${perm === 'granted' ? (NATIVE ? 'Activées : DS et devoirs rappelés 3 jours avant, la veille et le jour même' : 'Activées sur cet appareil') : perm === 'denied' ? 'Refusées — à réactiver dans Réglages iOS › ECAM › Notifications' : perm === 'old' ? 'Mets à jour l’app avec le dernier ECAM.ipa (SideStore)' :perm === 'unsupported' ? 'Installe l\'app pour les activer' : 'Désactivées'}</div></div></div>
     </div>
-    <div style="margin-top:10px">${perm === 'granted' ? `<button class="btn secondary" id="test-push">Envoyer une notification de test</button>` : `<button class="btn" id="enable-push" ${perm === 'unsupported' || perm === 'denied' ? 'disabled' : ''}>Activer les notifications</button>`}</div>
+    <div style="margin-top:10px">${perm === 'granted' ? `<button class="btn secondary" id="test-push">Envoyer une notification de test</button>` : `<button class="btn" id="enable-push" ${['unsupported', 'denied', 'old'].includes(perm) ? 'disabled' : ''}>Activer les notifications</button>`}</div>
     <div class="section-title">Ordinateur</div>
     <div class="list"><div class="row"><span class="lead">${icon('monitor')}</span><div class="grow"><div class="t">Transcription et IA</div><div class="s">${seen === null ? 'Jamais connecté' : seen < 5 ? 'Connecté' : `Vu il y a ${seen < 120 ? seen + ' min' : Math.round(seen / 60) + ' h'}`}</div></div></div></div>
     <div class="section-title">Compte ECAM</div>
@@ -495,7 +550,7 @@ const toggle = (id, label, def = true) => ({ id, label, type: 'toggle', def });
 const text = (id, label, ph) => ({ id, label, type: 'text', ph, def: '' });
 const FOCUS = text('focus', 'Centré sur (facultatif)', 'Ex. chapitre 3, les logarithmes, le cours du 5 oct.');
 const focusOf = (o) => (o.focus ? `, en te concentrant sur : ${o.focus}` : '');
-const READ = 'Lis d’abord mes documents (lister_documents, puis lire_document sur les transcriptions, mes notes et les supports utiles).';
+const READ = 'Récupère mes cours en UN SEUL appel : dossier_revision (fiches de mes cours + résumés de mes documents ; ajoute seance=AAAA-MM-JJ si la demande porte sur un cours précis). N’ouvre un document en entier (lire_document avec complet=true) que s’il manque un point précis, 2 documents au maximum. Les lignes « [Schéma] » décrivent les schémas de mes supports : reprends les importants dans ta réponse, reconstruits en texte (tableau, liste ou schéma en bloc de code).';
 
 const ASK = {
   fiche: {
@@ -511,7 +566,7 @@ const ASK = {
   ds: {
     icon: 'target', label: 'Prépa DS',
     opts: [toggle('blanc', 'Avec un DS blanc'), seg('nb', 'Exercices dans le DS blanc', ['3', '5', '8'], '5'), toggle('corr', 'Avec le corrigé détaillé'), FOCUS],
-    build: (s, o) => `Prépare-moi au prochain DS de « ${s} »${focusOf(o)}. Regarde devoirs et emploi_du_temps pour la date. ${READ} Inclus aussi les DS blancs, annales et TD. Donne : ce qui va le plus probablement tomber (justifié), les méthodes, les formules à connaître et les pièges${o.blanc ? `, puis un DS blanc de ${o.nb} exercices dans le style des annales${o.corr ? ', avec son corrigé détaillé' : ' (sans corrigé : je te donnerai mes réponses)'}` : ''}. Enregistre le tout avec enregistrer_fiche (titre « Prépa DS — ${s} »).`,
+    build: (s, o) => `Prépare-moi au prochain DS de « ${s} »${focusOf(o)}. Regarde devoirs et emploi_du_temps pour la date. ${READ} Inclus aussi les DS blancs, annales et TD. Regarde la liste des notions avec programme : traite CHAQUE notion au programme du DS dans sa propre section, sans en sauter aucune. Donne : ce qui va le plus probablement tomber (justifié), les méthodes, les formules à connaître et les pièges${o.blanc ? `, puis un DS blanc de ${o.nb} exercices dans le style des annales${o.corr ? ', avec son corrigé détaillé' : ' (sans corrigé : je te donnerai mes réponses)'}` : ''}. Enregistre le tout avec enregistrer_fiche (titre « Prépa DS — ${s} »).`,
   },
   quiz: {
     icon: 'check', label: 'Quiz',
@@ -578,7 +633,7 @@ function askFree(subject, question) {
     <label class="field" style="margin-top:6px"><span>Message envoyé à Claude</span><textarea id="k-text" rows="6"></textarea></label>
     <button class="btn" id="k-go">${icon('sparkles')}Ouvrir dans Claude</button>`, (sh) => {
     const box = $('#k-text', sh), useCourses = $('#k-cours', sh);
-    const regen = () => (box.value = useCourses.checked ? `Matière : « ${subject} ». Appuie-toi sur mes cours (lister_documents, lire_document) pour répondre. Question : ${question}` : question);
+    const regen = () => (box.value = useCourses.checked ? `Matière : « ${subject} ». Appuie-toi sur mes cours (dossier_revision en un seul appel) pour répondre. Question : ${question}` : question);
     useCourses.onchange = regen;
     $('#k-go', sh).onclick = () => { askClaude(box.value.trim()); closeSheet(); };
     regen();
@@ -935,11 +990,40 @@ async function recBar() {
     }, 1000);
   }
 }
+// Rappels programmés sur l'iPhone (comme ceux du serveur : J-3 et veille à 18 h, jour J à 7 h).
+// Le Web Push n'existe pas dans l'app SideStore et l'APNs demande un compte Apple payant : l'app programme donc
+// elle-même ses rappels, à chaque actualisation. Ils sonnent même app fermée.
+let nativePerm = 'default';
+function nativeReminders() {
+  const items = [
+    ...S.tasks.filter((t) => !t.done).map((t) => ({ key: 't-' + t.id, title: t.kind === 'ds' ? `DS — ${t.subject}` : t.title, sub: t.kind === 'ds' ? (t.title !== 'DS' ? t.title : '') : t.subject, due: t.due, note: t.note, url: t.event_uid ? '/#cours/' + encodeURIComponent(t.event_uid) : '/#devoirs' })),
+    ...S.events.filter((e) => isDS(e) && !S.tasks.some((t) => t.event_uid === e.uid)).map((e) => ({ key: 'e-' + e.uid.replace(/\W+/g, ''), title: `DS — ${e.subject}`, due: e.start, place: e.room, url: '/#cours/' + encodeURIComponent(e.uid) })),
+  ];
+  const out = [];
+  for (const it of items) for (const [n, label, hour] of [[3, 'Dans 3 jours', '18:00'], [1, 'Demain', '18:00'], [0, "Aujourd'hui", '07:00']]) {
+    const time = it.due.slice(11, 16);
+    out.push({ id: `${it.key}-${n}`, at: addDays(it.due, -n) + 'T' + hour, url: it.url, title: `${label} · ${it.title}`, body: [it.sub, time !== '00:00' ? time : '', it.place].filter(Boolean).join(' · ') + (it.note ? '\n' + it.note : '') });
+  }
+  return out.filter((x) => x.at > nowStr()).sort((a, b) => a.at.localeCompare(b.at));
+}
+async function scheduleNative(test) {
+  if (nativePerm !== 'granted') return;
+  const items = nativeReminders();
+  if (test) items.unshift({ id: 'test', at: new Date(Date.now() + 70e3).toLocaleString('sv-SE', { timeZone: 'Europe/Paris' }).slice(0, 16).replace(' ', 'T'), title: 'Notifications activées', body: 'Tes DS et devoirs te seront rappelés ici.', url: '/#devoirs' });
+  await NATIVE.schedule({ items }).catch(() => {});
+}
+async function enableNativeNotifs() {
+  nativePerm = (await NATIVE.notifEnable().catch(() => ({ status: 'old' }))).status;
+  if (nativePerm === 'granted') { await scheduleNative(true); toast('Notifications activées — test dans 1 minute', 4000); }
+  render(false);
+}
 if (NATIVE) {
+  NATIVE.notifStatus().then((r) => { nativePerm = r.status; scheduleNative(); if (location.hash === '#reglages') render(false); }).catch(() => { nativePerm = 'old'; });
+  addEventListener('ecam-state', () => scheduleNative());
   recBar();
   document.addEventListener('visibilitychange', () => { if (!document.hidden) recBar(); });
   // Petit retour haptique sur les éléments qu'on touche, comme une app iOS
-  document.addEventListener('click', (e) => { if (e.target.closest('.btn, .action, .tabbar a, .day, .seg button, .seg a, .icon-btn, .pick, .switch, [data-done]')) haptic(e.target.closest('.day, .seg button, .seg a, .tabbar a') ? 'selection' : 'light'); }, true);
+  document.addEventListener('click', (e) => { if (e.target.closest('.btn, .action, .tabbar a, .day, .seg button, .seg a, .icon-btn, .pick, .switch, [data-done], .row, .card, .tile, .days-nav, .back')) haptic('medium'); }, true); // clics : vibration franche ; défilement des jours : légère
 }
 
 async function record(ev) {
@@ -1046,10 +1130,24 @@ function goDay(day) {
   if (Math.abs(diff) === 1 && $('#track')) slideTo(diff);
   else setDay(day, diff > 0 ? 1 : -1, true);
 }
+// Titre de l'agenda (« Demain », date) : suit le doigt, puis s'efface vers le côté où part la journée
+const agTitle = () => $('#ag-head .head > div');
+function titleFollow(dx, width) {
+  const t = agTitle();
+  if (!t) return;
+  t.style.transition = 'none';
+  t.style.transform = `translateX(${dx * 0.35}px)`;
+  t.style.opacity = Math.max(0.15, 1 - Math.abs(dx) / (width * 0.7));
+}
+function titleReset() {
+  const t = agTitle();
+  if (t) { t.style.transition = 'transform .32s cubic-bezier(.2, .8, .2, 1), opacity .32s'; t.style.transform = ''; t.style.opacity = ''; }
+}
 function slideTo(dir) {
-  const track = $('#track');
+  const track = $('#track'), t = agTitle();
   haptic('selection');
   sliding = true;
+  if (t) { t.style.transition = 'transform .22s cubic-bezier(.4, 0, 1, 1), opacity .22s'; t.style.transform = `translateX(${dir > 0 ? -36 : 36}px)`; t.style.opacity = 0; }
   track.style.transition = 'transform .34s cubic-bezier(.2, .8, .2, 1)';
   track.style.transform = `translateX(${dir > 0 ? -66.6667 : 0}%)`;
   let done = false;
@@ -1090,13 +1188,14 @@ function pagerTouch() {
     e.preventDefault();
     s.dx = dx;
     track.style.transform = `translateX(calc(-33.3333% + ${dx}px))`;
+    titleFollow(dx, pager.clientWidth);
   }, { passive: false });
   pager.ontouchend = pager.ontouchcancel = () => {
     if (!s || s.axis !== 'x') { s = null; return; }
     const { dx } = s, speed = Math.abs(dx) / (Date.now() - s.t);
     s = null;
     if (Math.abs(dx) > pager.clientWidth * 0.25 || (Math.abs(dx) > 30 && speed > 0.45)) slideTo(dx < 0 ? 1 : -1);
-    else { track.style.transition = 'transform .3s cubic-bezier(.2, .8, .2, 1)'; track.style.transform = 'translateX(-33.3333%)'; }
+    else { track.style.transition = 'transform .3s cubic-bezier(.2, .8, .2, 1)'; track.style.transform = 'translateX(-33.3333%)'; titleReset(); }
   };
 }
 
@@ -1151,8 +1250,9 @@ function bind(route, arg) {
   on('add-task', () => taskSheet(ev ? { subject: ev.subject, event_uid: ev.uid, due: ev.start } : { subject: subjects()[0], due: todayStr() + 'T08:00' }));
   on('hide-subject', async () => { await api('/subjects', { method: 'POST', json: { name: arg, hidden: 1 } }); location.hash = '#matieres'; refresh(); });
   on('toggle-done', () => { showDone = !showDone; render(false); });
-  on('enable-push', enablePush);
+  on('enable-push', NATIVE ? enableNativeNotifs : enablePush);
   on('test-push', async () => {
+    if (NATIVE) { await scheduleNative(true); return toast('Notification de test dans 1 minute — tu peux verrouiller l’écran', 5000); }
     const r = await api('/test-push', { method: 'POST' }).catch((e) => [{ error: e.message }]);
     const bad = r.filter((x) => x.status !== 201 && x.status !== 200);
     toast(!r.length ? 'Aucun appareil abonné — réactive les notifications' : bad.length ? `Refusée : ${bad[0].error || bad[0].status}` : 'Envoyée — elle arrive dans quelques secondes', 5000);

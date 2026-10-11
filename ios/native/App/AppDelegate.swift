@@ -25,6 +25,19 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         [.banner, .sound]
     }
 
+    // Toucher un rappel : ouvre la bonne page de l'app (userInfo["url"] = « /#cours/… », « /#devoirs »)
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        guard let path = response.notification.request.content.userInfo["url"] as? String,
+              let hash = path.split(separator: "#", maxSplits: 1).last, path.contains("#") else { return }
+        let js = "location.hash = \(String(reflecting: "#" + hash))"
+        await MainActor.run {
+            // ponytail: petit délai fixe pour laisser la page se charger au démarrage à froid
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                (self.window?.rootViewController as? CAPBridgeViewController)?.webView?.evaluateJavaScript(js)
+            }
+        }
+    }
+
     func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
         ApplicationDelegateProxy.shared.application(app, open: url, options: options)
     }

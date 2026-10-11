@@ -98,10 +98,19 @@ main.push { animation: push .32s var(--ease); }
 .pager { overflow: hidden; margin: 0 -18px; touch-action: pan-y; }
 .track { display: flex; align-items: flex-start; width: 300%; transform: translateX(-33.3333%); will-change: transform; }
 .pane { width: 33.3333%; flex: none; padding: 0 18px; min-height: 40vh; }
-#ag-head h1.swap-l, #ag-head .sub.swap-l { animation: swapL .32s var(--ease); }
-#ag-head h1.swap-r, #ag-head .sub.swap-r { animation: swapR .32s var(--ease); }
-@keyframes swapL { from { opacity: 0; transform: translateX(16px); } }
-@keyframes swapR { from { opacity: 0; transform: translateX(-16px); } }
+#ag-head h1.swap-l, #ag-head .sub.swap-l { animation: swapL .42s cubic-bezier(.2, .8, .2, 1) both; }
+#ag-head h1.swap-r, #ag-head .sub.swap-r { animation: swapR .42s cubic-bezier(.2, .8, .2, 1) both; }
+#ag-head .sub.swap-l, #ag-head .sub.swap-r { animation-delay: .04s; } /* la date suit le titre, en léger décalé */
+@keyframes swapL { from { opacity: 0; transform: translateX(36px); filter: blur(3px); } }
+@keyframes swapR { from { opacity: 0; transform: translateX(-36px); filter: blur(3px); } }
+/* Vacances */
+.day.vac b { color: var(--muted); }
+.day.vac i { background: #f2a33a; }
+.empty.vacation { padding-top: 54px; }
+.empty.vacation b { display: block; color: var(--text); font-size: 20px; letter-spacing: -.02em; margin-bottom: 6px; }
+.vac-sun { width: 76px; height: 76px; margin: 0 auto 16px; border-radius: 50%; display: grid; place-items: center; background: radial-gradient(circle at 35% 30%, #ffd27a, #f2a33a); box-shadow: 0 10px 30px -8px #f2a33a99; animation: vacIn .6s cubic-bezier(.2, .8, .2, 1) both; }
+.empty .vac-sun svg { width: 36px; height: 36px; margin: 0; opacity: 1; color: #fff; stroke-width: 2; animation: spin 24s linear infinite; }
+@keyframes vacIn { from { opacity: 0; transform: scale(.7); } }
 .pager.fadein { animation: fade .28s var(--ease); }
 
 /* ---------- Cartes & listes ---------- */

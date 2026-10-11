@@ -2,6 +2,7 @@ import AVFoundation
 import Capacitor
 import Foundation
 import UIKit
+import UserNotifications
 
 // Pont entre l'app web et l'enregistreur natif.
 // Côté JavaScript : const r = window.Capacitor.Plugins.EcamRecorder
@@ -18,7 +19,51 @@ public class RecorderPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "stop", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "status", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "haptic", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "notifStatus", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "notifEnable", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "schedule", returnType: CAPPluginReturnPromise),
     ]
+
+    // ---------- Rappels (notifications locales : le Web Push n'existe pas dans l'app installée par SideStore) ----------
+    @objc func notifStatus(_ call: CAPPluginCall) {
+        UNUserNotificationCenter.current().getNotificationSettings { s in
+            call.resolve(["status": s.authorizationStatus == .authorized ? "granted" : s.authorizationStatus == .denied ? "denied" : "default"])
+        }
+    }
+
+    @objc func notifEnable(_ call: CAPPluginCall) {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+            call.resolve(["status": granted ? "granted" : "denied"])
+        }
+    }
+
+    // items : [{ id, title, body, at: "AAAA-MM-JJTHH:MM" (heure de Paris), url }] — remplace tous les rappels programmés
+    @objc func schedule(_ call: CAPPluginCall) {
+        let items = call.getArray("items", JSObject.self) ?? []
+        let center = UNUserNotificationCenter.current()
+        center.getPendingNotificationRequests { pending in
+            center.removePendingNotificationRequests(withIdentifiers: pending.map(\.identifier).filter { $0.hasPrefix("ecam-") })
+            let parse = DateFormatter()
+            parse.dateFormat = "yyyy-MM-dd'T'HH:mm"
+            parse.timeZone = TimeZone(identifier: "Europe/Paris")
+            var cal = Calendar(identifier: .gregorian)
+            cal.timeZone = TimeZone(identifier: "Europe/Paris")!
+            var count = 0
+            for it in items.prefix(60) { // iOS garde 64 rappels au maximum
+                guard let id = it["id"] as? String, let at = it["at"] as? String, let date = parse.date(from: at), date > Date() else { continue }
+                let content = UNMutableNotificationContent()
+                content.title = it["title"] as? String ?? "ECAM"
+                content.body = it["body"] as? String ?? ""
+                content.sound = .default
+                content.userInfo = ["url": it["url"] as? String ?? "/#devoirs"]
+                let when = cal.dateComponents(in: cal.timeZone, from: date)
+                let trigger = UNCalendarNotificationTrigger(dateMatching: DateComponents(timeZone: cal.timeZone, year: when.year, month: when.month, day: when.day, hour: when.hour, minute: when.minute), repeats: false)
+                center.add(UNNotificationRequest(identifier: "ecam-" + id, content: content, trigger: trigger))
+                count += 1
+            }
+            call.resolve(["scheduled": count])
+        }
+    }
 
     // Retour haptique iOS (vibration légère au toucher, réussite…)
     @objc func haptic(_ call: CAPPluginCall) {

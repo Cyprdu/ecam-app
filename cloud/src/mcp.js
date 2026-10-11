@@ -1,7 +1,9 @@
 // Connecteur MCP pour Claude (claude.ai / app Claude) : Claude lit les cours et enregistre ses fiches dans l'app.
 // Protocole : JSON-RPC 2.0 en HTTP simple (« Streamable HTTP » sans flux).
 const VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
-const MAX = 60000; // caractères renvoyés par lecture
+const MAX = 40000; // caractères renvoyés par lecture
+const DOSSIER = 120000; // caractères max renvoyés par dossier_revision
+const RESUME = 'Résumé'; // nom des résumés faits par le PC (enfants « text » des documents longs)
 
 const norm = (s) => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
 
@@ -53,30 +55,59 @@ export function tools(ctx) {
     },
     {
       name: 'lister_documents',
-      description: "Documents d'une matière : supports du prof (doc), transcriptions des cours (transcript), fiches de révision (fiche), enregistrements (audio). Donne les id à passer à lire_document.",
+      description: "Liste des documents d'une matière (id, type, séance). Pour réviser, préfère dossier_revision qui donne directement leur contenu résumé en un seul appel.",
       inputSchema: { type: 'object', properties: { matiere: { type: 'string' } }, required: ['matiere'] },
       async run({ matiere }) {
         const s = await findSubject(matiere);
         if (!s) return `Matière inconnue. Utilise lister_matieres.`;
-        const { results } = await DB.prepare("SELECT f.*, (SELECT COUNT(*) FROM files t WHERE t.parent = f.id AND t.kind = 'text') AS has_text FROM files f WHERE f.subject = ? AND f.kind != 'text' ORDER BY COALESCE(f.event_uid, ''), f.name").bind(s).all();
+        const { results } = await DB.prepare("SELECT f.*, (SELECT COUNT(*) FROM files t WHERE t.parent = f.id AND t.kind = 'text' AND t.name != ?) AS has_text, (SELECT COUNT(*) FROM files t WHERE t.parent = f.id AND t.kind = 'text' AND t.name = ?) AS has_digest FROM files f WHERE f.subject = ? AND f.kind != 'text' ORDER BY COALESCE(f.event_uid, ''), f.name").bind(RESUME, RESUME, s).all();
         const lisible = (f) => ['transcript', 'fiche'].includes(f.kind) || f.has_text || /^text\//.test(f.mime || '');
-        return `Matière : ${s}\n` + results.map((f) => `- id=${f.id} · ${f.kind} · ${f.name}${f.event_uid ? ` · séance ${session(f.event_uid)}` : ''} · ${Math.round(f.size / 1024)} Ko${f.kind === 'audio' ? '' : lisible(f) ? '' : ' · (texte non disponible)'}`).join('\n');
+        return `Matière : ${s}\n` + results.map((f) => `- id=${f.id} · ${f.kind} · ${f.name}${f.event_uid ? ` · séance ${session(f.event_uid)}` : ''} · ${Math.round(f.size / 1024)} Ko${f.has_digest ? ' · résumé dispo' : ''}${f.kind === 'audio' ? '' : lisible(f) ? '' : ' · (texte non disponible)'}`).join('\n');
       },
     },
     {
       name: 'lire_document',
-      description: `Texte d'un document (transcription, fiche, ou texte extrait d'un PDF/Word). Renvoie ${MAX} caractères max : utilise "debut" pour lire la suite.`,
-      inputSchema: { type: 'object', properties: { id: { type: 'string' }, debut: { type: 'number', description: 'position de départ (caractères)' } }, required: ['id'] },
-      async run({ id, debut = 0 }) {
+      description: `Contenu d'un document. Par défaut son RÉSUMÉ s'il en a un (beaucoup plus court) ; complet=true pour le texte intégral (${MAX} caractères max par appel, "debut" pour la suite). N'utilise complet=true que si un point précis manque.`,
+      inputSchema: { type: 'object', properties: { id: { type: 'string' }, complet: { type: 'boolean', description: 'texte intégral au lieu du résumé' }, debut: { type: 'number', description: 'position de départ (caractères)' } }, required: ['id'] },
+      async run({ id, complet = false, debut = 0 }) {
         const f = await DB.prepare('SELECT * FROM files WHERE id=?').bind(id).first();
         if (!f) return 'Document introuvable.';
-        const textId = ['transcript', 'fiche', 'text'].includes(f.kind) || /^text\//.test(f.mime || '') ? f.id : (await DB.prepare("SELECT id FROM files WHERE parent=? AND kind='text'").bind(id).first())?.id;
+        const digest = !complet && !debut && (await DB.prepare("SELECT id FROM files WHERE parent=? AND kind='text' AND name=?").bind(id, RESUME).first());
+        if (digest) return `# ${f.name} — résumé (${f.subject}${f.event_uid ? ', séance ' + session(f.event_uid) : ''})\n\n${await (await env.FILES.get(digest.id))?.text()}\n\n[Texte intégral : lire_document avec complet=true, seulement si nécessaire]`;
+        const textId = ['transcript', 'fiche', 'text'].includes(f.kind) || /^text\//.test(f.mime || '') ? f.id : (await DB.prepare("SELECT id FROM files WHERE parent=? AND kind='text' AND name != ?").bind(id, RESUME).first())?.id;
         if (!textId) return `Pas de texte disponible pour « ${f.name} » (le PC n'a pas encore extrait son contenu).`;
         const all = await (await env.FILES.get(textId))?.text();
         if (all == null) return 'Contenu introuvable.';
         const part = all.slice(debut, debut + MAX);
         const rest = all.length - debut - part.length;
         return `# ${f.name} (${f.subject}${f.event_uid ? ', séance ' + session(f.event_uid) : ''})\n\n${part}${rest > 0 ? `\n\n[… ${rest} caractères restants : rappelle lire_document avec debut=${debut + part.length}]` : ''}`;
+      },
+    },
+    {
+      name: 'dossier_revision',
+      description: "À UTILISER EN PREMIER pour toute fiche, mémo, prépa DS, quiz ou explication : tout le contenu utile d'une matière en UN appel (fiches des cours en entier, puis résumé de chaque transcription, note et support). Avec seance=AAAA-MM-JJ : seulement ce cours, transcription complète comprise.",
+      inputSchema: { type: 'object', properties: { matiere: { type: 'string' }, seance: { type: 'string', description: 'optionnel : AAAA-MM-JJ du cours' } }, required: ['matiere'] },
+      async run({ matiere, seance }) {
+        const s = await findSubject(matiere);
+        if (!s) return 'Matière inconnue. Utilise lister_matieres.';
+        const { results } = await DB.prepare("SELECT f.id, f.kind, f.name, f.mime, f.event_uid, (SELECT id FROM files t WHERE t.parent = f.id AND t.kind = 'text' AND t.name = ?) AS digest_id, (SELECT id FROM files t WHERE t.parent = f.id AND t.kind = 'text' AND t.name != ?) AS text_id FROM files f WHERE f.subject = ? AND f.kind IN ('fiche', 'transcript', 'doc') ORDER BY COALESCE(f.event_uid, ''), f.name").bind(RESUME, RESUME, s).all();
+        const inSession = (f) => !seance || (f.event_uid || '').startsWith(seance);
+        const read = async (id) => (id ? (await (await env.FILES.get(id))?.text()) || '' : '');
+        // fiches des cours d'abord (elles couvrent leur transcription), puis les autres documents
+        const courseFiches = results.filter((f) => f.kind === 'fiche' && f.event_uid && inSession(f));
+        const covered = new Set(courseFiches.map((f) => f.event_uid));
+        const others = results.filter((f) => f.kind !== 'fiche' && inSession(f) && !(f.kind === 'transcript' && covered.has(f.event_uid) && !seance));
+        const out = [];
+        let left = DOSSIER;
+        const add = (title, text) => { if (!text || left < 500) return; const t = text.slice(0, left); out.push(`=== ${title} ===\n${t}`); left -= t.length; };
+        for (const f of courseFiches) add(`Fiche du cours du ${session(f.event_uid)} — ${f.name}`, await read(f.id));
+        for (const f of others) {
+          const own = f.kind === 'transcript' || /^text\//.test(f.mime || '') ? f.id : f.text_id;
+          // une séance précise : texte complet ; toute la matière : résumé (ou début du texte s'il n'y a pas encore de résumé)
+          const text = seance || !f.digest_id ? (await read(own)).slice(0, seance ? 90000 : 6000) : await read(f.digest_id);
+          add(`${f.kind === 'transcript' ? 'Transcription' : 'Document'} ${f.name}${f.event_uid ? ' (séance ' + session(f.event_uid) + ')' : ''}${!seance && f.digest_id ? ' — résumé' : ''} [id=${f.id}]`, text);
+        }
+        return out.length ? `Matière : ${s}${seance ? ' — séance du ' + seance : ''}\n\n` + out.join('\n\n') + (left < 500 ? '\n\n[Limite atteinte : le reste est accessible avec lire_document]' : '') : `Aucun contenu lisible pour ${s}${seance ? ' le ' + seance : ''}.`;
       },
     },
     {
@@ -164,7 +195,7 @@ export async function handleMcp(req, ctx) {
           protocolVersion: VERSIONS.includes(m.params?.protocolVersion) ? m.params.protocolVersion : VERSIONS[0],
           capabilities: { tools: {} },
           serverInfo: { name: 'ECAM', version: '1.0.0' },
-          instructions: "Accès aux cours d'un étudiant de l'ECAM : emploi du temps, transcriptions, supports, fiches, notes, devoirs. Pour une fiche : lire consignes_fiche, lister_documents, lire les documents utiles, puis enregistrer_fiche.",
+          instructions: "Accès aux cours d'un étudiant de l'ECAM : emploi du temps, transcriptions, supports, fiches, notes, devoirs. Pour une fiche : consignes_fiche, puis dossier_revision (UN appel, contenu déjà résumé), puis enregistrer_fiche. N'ouvre un document entier (lire_document complet=true) que s'il manque un point précis.",
         });
       case 'ping':
         return ok({});

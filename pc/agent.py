@@ -25,7 +25,6 @@ ECAM = Path(CFG["ecam_dir"])
 CACHE = HERE / "cache"
 MANIFEST = HERE / "sync.json"  # chemin local → id cloud (fichiers déjà synchronisés)
 IGNORE = set(CFG.get("ignore", [])) | {"_APP", ".claude"}
-TEXT_EXT = {".pdf", ".docx", ".pptx", ".html", ".htm"}  # texte extrait pour l'assistant
 AUDIO_EXT = {".m4a", ".mp3", ".wav", ".aac"}
 MOIS = ["JANVIER", "FEVRIER", "MARS", "AVRIL", "MAI", "JUIN", "JUILLET", "AOUT", "SEPTEMBRE", "OCTOBRE", "NOVEMBRE", "DECEMBRE"]
 
@@ -179,78 +178,167 @@ def extract_text(p: Path):
 IMG_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
 
-def document_images(p: Path, out: Path):
-    """Images contenues dans un document (ou le fichier lui-même si c'est une image), copiées dans out."""
-    ext = p.suffix.lower()
-    if ext in IMG_EXT:
-        return [p]
-    out.mkdir(parents=True, exist_ok=True)
-    found = []
+# ---------- Analyse UNIQUE de chaque document (texte + schémas) ----------
+# Chaque document est analysé une seule fois : son texte, et la description par Claude de chacun de ses schémas
+# (pages de PDF rendues en image, images des Word/PowerPoint, photos). Le résultat est gardé (par contenu du
+# fichier) et envoyé dans l'app : fiches, prépas DS, quiz et assistant le réutilisent sans jamais relire le fichier.
+SCANS = CACHE / "scans"
+SCAN_BATCH = 6  # images par message à Claude
+
+
+def clean(t):
+    return re.sub(r"\n\s*\n+", "\n\n", re.sub(r"[ \t ]+", " ", t or "")).strip()
+
+
+def jpeg(data: bytes, max_side=1400):
+    """Image réduite en JPEG (moins de tokens, format accepté partout) ; None si illisible ou minuscule."""
+    from io import BytesIO
+
+    from PIL import Image
+
     try:
-        if ext in (".docx", ".pptx"):
-            z = zipfile.ZipFile(p)
-            for n in sorted(n for n in z.namelist() if re.search(r"/media/", n) and Path(n).suffix.lower() in IMG_EXT):
-                t = out / f"{len(found):02d}{Path(n).suffix.lower()}"
-                t.write_bytes(z.read(n))
-                found.append(t)
-        elif ext == ".pdf":
-            from pypdf import PdfReader
-
-            for pg in PdfReader(p).pages:
-                for im in pg.images:
-                    if Path(im.name).suffix.lower() in IMG_EXT and len(im.data) > 20_000:  # pas les petits logos
-                        t = out / f"{len(found):02d}{Path(im.name).suffix.lower()}"
-                        t.write_bytes(im.data)
-                        found.append(t)
-    except Exception as e:
-        log("images non extraites :", p.name, e)
-    return found[:25]
+        im = Image.open(BytesIO(data))
+        if im.width * im.height < 40_000:  # icône, puce, petit logo
+            return None
+        im.thumbnail((max_side, max_side))
+        out = BytesIO()
+        im.convert("RGB").save(out, "JPEG", quality=80)
+        return out.getvalue()
+    except Exception:
+        return None
 
 
-def ocr_images(p: Path):
-    """Claude lit les images du document et les retranscrit en texte."""
-    imgs = document_images(p, CACHE / "ocr" / re.sub(r"\W+", "_", p.stem)[:60])
-    if not imgs:
-        return ""
-    log(f"lecture des images par Claude ({len(imgs)}) :", p.name)
-    prompt = f"""Ces images viennent du document « {p.name} » (cours d'un étudiant ingénieur). Lis-les toutes avec l'outil Read, dans l'ordre :
-{chr(10).join('- ' + str(i) for i in imgs)}
+def pdf_pages(p: Path):
+    """[(libellé, texte, image ou None)] : seules les pages qui ont un vrai visuel sont rendues en image
+    (les images répétées sur beaucoup de pages — fond, logo du modèle de diapo — ne comptent pas)."""
+    from collections import Counter
 
-Retranscris fidèlement tout leur contenu en texte : le texte exact, les formules, les tableaux en Markdown, et les schémas décrits en une ou deux phrases.
-Indique « [Image N] » avant chaque image. Réponds UNIQUEMENT avec la transcription."""
-    return claude(prompt, imgs[0].parent)
+    import pymupdf
+
+    doc = pymupdf.open(p)
+    seen = Counter(x for pg in doc for x in {i[0] for i in pg.get_images(full=True)})
+    template = {x for x, n in seen.items() if len(doc) > 3 and n > len(doc) * 0.3}
+    texts = [pg.get_text() for pg in doc]
+    lines = Counter(ln.strip() for t in texts for ln in set(t.splitlines()) if ln.strip())
+    footer = {ln for ln, n in lines.items() if len(doc) > 3 and n > len(doc) * 0.3}  # pied de page, titre répété
+    out = []
+    for i, pg in enumerate(doc):
+        text = "\n".join(ln for ln in texts[i].splitlines() if ln.strip() not in footer)
+        text = clean(re.sub(r"(?<![.:;!?])\n(?![•▪➢\-–]|\n)", " ", re.sub(r"([•▪➢–-])\s*\n", r"\1 ", text)))  # un mot par ligne → phrases
+        own = [im for im in pg.get_images(full=True) if im[0] not in template and im[2] * im[3] > 40_000]
+        visual = own or len(pg.get_drawings()) > 10 or (len(text) < 200 and pg.get_images())  # schéma, figure, ou page scannée
+        out.append((f"Page {i + 1}", text, jpeg(pg.get_pixmap(dpi=110).tobytes("png")) if visual else None))
+    return out
+
+
+def embedded_images(p: Path):
+    """Images d'un Word / PowerPoint, dans l'ordre."""
+    z = zipfile.ZipFile(p)
+    names = sorted((n for n in z.namelist() if "/media/" in n and Path(n).suffix.lower() in IMG_EXT), key=lambda n: [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", n)])
+    return [d for n in names if (d := jpeg(z.read(n)))][:40]
+
+
+SCHEMA_PROMPT = """Images extraites du document de cours « {name} » (matière : {subject} ; cursus cybersécurité des réseaux industriels et urbains).
+Pour CHAQUE image, dans l'ordre, écris « ### Image k » puis décris ce qu'elle apporte au cours, pour qu'on puisse réviser SANS la voir :
+- nature du visuel (architecture réseau, modèle en couches, topologie, zones et conduits, modèle de Purdue, chronogramme, trame, tableau, capture d'écran, photo de matériel…) ;
+- tous les éléments avec leurs libellés exacts (équipements, zones, niveaux, adresses, protocoles, ports, champs, valeurs) ;
+- les liaisons, le sens des flux et des flèches, ce qui est filtré ou protégé, et ce que le schéma démontre ;
+- un tableau en Markdown si c'est un tableau.
+Ne recopie pas le texte de la page déjà fourni ci-dessous, complète-le. Si l'image est décorative (logo, page de titre, illustration sans contenu), écris seulement « (décoratif) ».
+Style dense, sans phrase d'introduction.
+"""
+
+
+SCHEMAS = CACHE / "schemas"  # une description par image (par contenu) : un même schéma n'est jamais analysé deux fois
+
+
+def schema_file(im: bytes):
+    return SCHEMAS / (hashlib.sha1(im).hexdigest()[:24] + ".md")
+
+
+def describe(images, name, subject):
+    """images : [(libellé, texte de la page, jpeg)] → descriptions, envoyées à Claude Haiku par paquets, en un seul message chacun."""
+    todo = [x for x in images if not schema_file(x[2]).exists()]  # déjà décrite (même dans un autre document) : rien à refaire
+    SCHEMAS.mkdir(parents=True, exist_ok=True)
+    for k in range(0, len(todo), SCAN_BATCH):
+        part = todo[k:k + SCAN_BATCH]
+        ctx = "\n".join(f"Image {j + 1} = {label}. Texte de la page : {text[:600] or '(aucun)'}" for j, (label, text, _) in enumerate(part))
+        res = claude(SCHEMA_PROMPT.format(name=name, subject=subject) + "\n" + ctx, HERE, model="haiku", images=[im for _, _, im in part])
+        found = dict(re.findall(r"###\s*Image\s*(\d+)\s*\n(.*?)(?=\n###\s*Image\s*\d+|\Z)", res, re.S))
+        for j, (_, _, im) in enumerate(part):
+            schema_file(im).write_text(found.get(str(j + 1), "").strip(), encoding="utf-8")
+    return [schema_file(im).read_text(encoding="utf-8") for _, _, im in images]
+
+
+def scan(p: Path, subject=""):
+    """Contenu complet d'un document : texte + description de ses schémas. Analysé UNE fois, puis lu dans le cache."""
+    ext = p.suffix.lower()
+    if ext in (".txt", ".md"):
+        return clean(p.read_text(encoding="utf-8", errors="ignore"))
+    data = p.read_bytes()
+    c = SCANS / (hashlib.sha1(data).hexdigest()[:24] + ".md")  # par contenu : un doublon ou un fichier déplacé n'est pas réanalysé
+    if c.exists():
+        return c.read_text(encoding="utf-8")
+    if ext == ".pdf":
+        parts = pdf_pages(p)
+    elif ext in IMG_EXT:
+        parts = [("Image", "", jpeg(data, 1800))]
+    elif ext in (".docx", ".pptx"):
+        parts = [("Texte", clean(extract_text(p)), None)] + [(f"Image {i + 1} du document", "", im) for i, im in enumerate(embedded_images(p))]
+    else:
+        parts = [("Texte", clean(extract_text(p)), None)]
+    visuals = [x for x in parts if x[2]]
+    if visuals:
+        log(f"analyse des schémas (une seule fois) : {p.name} — {len(visuals)} image(s)")
+    descs = iter(describe(visuals, p.name, subject) if visuals else [])
+    blocks = []
+    for label, text, im in parts:
+        d = next(descs) if im else ""
+        d = "" if re.fullmatch(r"\(?décoratif\)?\.?", d, re.I) else d
+        if text or d:
+            blocks.append(f"--- {label} ---\n{text}" + (f"\n[Schéma] {d}" if d else ""))
+    result = "\n\n".join(blocks)
+    SCANS.mkdir(parents=True, exist_ok=True)
+    c.write_text(result, encoding="utf-8")
+    return result
 
 
 def send_text(p: Path, subject, uid, parent_id):
-    text = extract_text(p) if p.suffix.lower() in TEXT_EXT else ""
-    if len(text.strip()) <= 200:  # PDF scanné, Word plein de photos, image : on fait lire les images
-        try:
-            text = ocr_images(p) or text
-        except Exception as e:
-            log("lecture des images impossible :", p.name, e)
-    if len(text.strip()) > 200:
-        upload("text", subject, uid, p.name + ".txt", text.encode("utf-8"), "text/plain; charset=utf-8", parent=parent_id)
-        return True
-    return False
+    """Envoie dans l'app le contenu analysé du document, et son résumé s'il est long (l'assistant lit le résumé)."""
+    text = scan(p, subject)
+    if len(text) <= 200:
+        return False
+    upload("text", subject, uid, p.name + ".txt", text.encode("utf-8"), "text/plain; charset=utf-8", parent=parent_id)
+    if len(text) > DIGEST_MIN:
+        upload("text", subject, uid, "Résumé", digest(p, subject).encode("utf-8"), "text/plain; charset=utf-8", parent=parent_id)
+    return True
 
 
-OCR_TRIED = HERE / "textes.json"  # documents déjà passés à la lecture (pour ne pas recommencer)
+SCANNED = HERE / "analyses.json"  # documents déjà analysés et envoyés dans l'app
 
 
-def backfill_text(state):
-    """Documents déjà dans l'app mais sans texte lisible par l'assistant : on réessaie une fois (images comprises)."""
-    tried = set(json.loads(OCR_TRIED.read_text())) if OCR_TRIED.exists() else set()
+def backfill_docs(state, n=2):
+    """Documents déjà dans l'app : analyse unique (schémas compris) + résumé, quelques-uns par minute pour étaler."""
+    done = set(json.loads(SCANNED.read_text())) if SCANNED.exists() else set()
     by_id = {v["id"]: ECAM / rel for rel, v in load_manifest().items() if v.get("id")}
     for f in state["files"]:
-        if f["kind"] != "doc" or f.get("has_text") or f["id"] in tried:
-            continue
         path = by_id.get(f["id"])
-        if not path or not path.exists() or path.suffix.lower() not in TEXT_EXT | IMG_EXT:
+        if n <= 0 or f["kind"] not in ("doc", "transcript") or f["id"] in done or not path or not path.exists():
             continue
-        tried.add(f["id"])
-        OCR_TRIED.write_text(json.dumps(sorted(tried)))
-        if send_text(path, f["subject"], f["event_uid"], f["id"]):
-            log("texte ajouté pour l'assistant :", path.name)
+        try:
+            if f["kind"] == "doc" and readable(path):
+                send_text(path, f["subject"], f["event_uid"], f["id"])
+                n -= 1
+            elif f["kind"] == "transcript" and len(scan(path)) > DIGEST_MIN:
+                upload("text", f["subject"], f["event_uid"], "Résumé", digest(path, f["subject"]).encode("utf-8"), "text/plain; charset=utf-8", parent=f["id"])
+                n -= 1
+        except RuntimeError as e:  # Claude indisponible (limite atteinte…) : on réessaiera plus tard
+            log("analyse reportée :", path.name, e)
+            return
+        except Exception as e:  # fichier abîmé : inutile de réessayer
+            log("analyse impossible :", path.name, e)
+        done.add(f["id"])
+        SCANNED.write_text(json.dumps(sorted(done)))
 
 
 def folder_subjects(events):
@@ -287,7 +375,6 @@ def push_local(state, dry=False):
                 except Exception:
                     pass
             res = upload(kind, subject, uid, inner.as_posix(), p.read_bytes(), mime_of(p), created=datetime.fromtimestamp(st.st_mtime).isoformat())
-            send_text(p, subject, uid, res["id"])
             remember(p, res["id"])
             log("envoyé dans l'app :", p.relative_to(ECAM))
 
@@ -320,8 +407,6 @@ def pull_cloud(state):
             else:
                 download(f["id"], dest)
             log("copié sur le PC :", dest.relative_to(ECAM))
-            if f["kind"] == "doc":
-                send_text(dest, f["subject"], f["event_uid"], f["id"])
         remember(dest, f["id"])
 
 
@@ -407,46 +492,86 @@ def docx_text(p: Path):
     return re.sub(r"<[^>]+>", "", xml)
 
 
-def readable(p: Path, root: Path):
-    """Version lisible par Claude d'un fichier (les .docx sont convertis en texte dans le cache), ou None."""
-    ext = p.suffix.lower()
-    if ext in (".pdf", ".txt", ".md", ".png", ".jpg", ".jpeg"):
-        return p
-    if ext != ".docx":
-        return None
-    t = CACHE / root.name / (p.relative_to(root).as_posix().replace("/", "__") + ".txt")
-    t.parent.mkdir(parents=True, exist_ok=True)
-    if not t.exists() or t.stat().st_mtime < p.stat().st_mtime:
-        try:
-            t.write_text(docx_text(p), encoding="utf-8")
-        except Exception:
-            return None
-    return t
+READABLE = {".pdf", ".txt", ".md", ".docx", ".pptx", ".html", ".htm"} | IMG_EXT
+
+
+def readable(p: Path, root: Path = None):
+    """Le fichier s'il peut servir de source (texte, PDF, Word, PowerPoint, image), sinon None."""
+    return p if p.suffix.lower() in READABLE and not p.name.endswith(".part") else None
 
 
 def readable_files(folder: Path):
-    return [r for p in sorted(folder.rglob("*")) if p.is_file() and not p.name.endswith(".part") and (r := readable(p, folder))]
+    return [p for p in sorted(folder.rglob("*")) if p.is_file() and readable(p)]
 
 
 def readable_files_of(p: Path):
-    r = readable(p, p.parent)
-    return [r] if r else []
+    return [p] if readable(p) else []
 
 
-def claude(prompt, cwd: Path):
-    cmd = ["claude", "-p", "--allowedTools", "Read", "Glob", "Grep", "--add-dir", str(CACHE), "--output-format", "text"]
+SYSTEM = "Assistant de revision d'un etudiant ingenieur (ECAM Lyon). Reponds en francais, avec rigueur, sans rien inventer."  # sans accents : passe par la ligne de commande Windows
+
+
+def claude(prompt, cwd: Path, model="sonnet", images=()):
+    """Un seul échange avec Claude, sans le contexte de Claude Code (≈ 3 000 tokens fixes au lieu de ≈ 40 000) :
+    les sources sont collées dans le message, les images (JPEG) jointes au même message."""
+    cmd = ["claude", "-p", "--model", model, "--system-prompt", SYSTEM, "--strict-mcp-config", "--no-session-persistence", "--tools", ""]
+    if images:
+        import base64
+
+        content = [{"type": "text", "text": prompt}] + [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(im).decode()}} for im in images]
+        cmd += ["--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]
+        prompt = json.dumps({"type": "user", "message": {"role": "user", "content": content}}) + "\n"
+    else:
+        cmd += ["--output-format", "text"]
     r = subprocess.run(cmd, input=prompt, cwd=cwd, capture_output=True, text=True, encoding="utf-8", timeout=3600, shell=sys.platform == "win32")
-    if r.returncode != 0 or not r.stdout.strip():
+    out = r.stdout
+    if images:
+        res = [json.loads(line) for line in out.splitlines() if line.startswith("{") and '"type":"result"' in line]
+        out = res[-1].get("result", "") if res and not res[-1].get("is_error") else ""
+    if r.returncode != 0 or not out.strip():
         raise RuntimeError((r.stderr or r.stdout or "Claude n'a rien renvoyé")[-500:])
-    return r.stdout.strip()
+    return out.strip()
 
 
 BASE_PROMPT = (ECAM / "PROMPT.txt").read_text(encoding="utf-8") if (ECAM / "PROMPT.txt").exists() else ""
 OUTPUT_RULE = "\n\nRÈGLE DE SORTIE : réponds UNIQUEMENT avec la fiche en Markdown, sans préambule ni commentaire sur ta démarche."
+SCHEMA_RULE = """
+Les lignes « [Schéma] » décrivent les images des supports (architectures, modèles en couches, zones, trames…) : ce sont des informations de cours à part entière.
+Reprends dans la fiche chaque schéma important, reconstruit en texte (tableau, liste hiérarchique, ou schéma dans un bloc de code), avec ce qu'il faut en retenir."""
 
 
-def file_list(paths, root):
-    return "\n".join(f"- {p}" for p in paths)
+# ---------- Résumés (faits une fois, à partir de l'analyse unique du document) ----------
+DIGEST_MIN = 6000  # en dessous, le contenu complet sert de résumé
+DIGEST_PROMPT = """Résume ce document de cours (« {name} », matière {subject}) pour qu'il serve ensuite de source à une fiche de révision.
+Garde TOUT ce qui peut tomber en examen, en style télégraphique : plan, définitions exactes, formules (avec unités), chiffres, dates, méthodes pas à pas, exemples et exercices types, points sur lesquels le prof insiste.
+Garde aussi chaque schéma important (lignes « [Schéma] ») : ses éléments, leurs liens et ce qu'il montre, en quelques lignes.
+Supprime le reste (bavardages, répétitions, logistique, images décoratives). 500 à 1200 mots. Réponds UNIQUEMENT avec le résumé en Markdown.
+
+DOCUMENT :
+"""
+
+
+def digest(p: Path, subject=""):
+    """Résumé dense d'un long document, fait une seule fois par Claude Haiku puis gardé en cache."""
+    t = scan(p, subject)
+    if len(t) <= DIGEST_MIN:
+        return t
+    c = CACHE / "resumes" / ("v2-" + hashlib.sha1(t.encode()).hexdigest()[:20] + ".md")
+    if not c.exists():
+        log("résumé (une seule fois) :", p.name)
+        c.parent.mkdir(parents=True, exist_ok=True)
+        c.write_text(claude(DIGEST_PROMPT.format(name=p.name, subject=subject) + t[:60000], HERE, model="haiku"), encoding="utf-8")
+    return c.read_text(encoding="utf-8")
+
+
+def bundle(items, budget):
+    """Colle les sources (titre, texte) dans le prompt, dans l'ordre, jusqu'au budget de caractères."""
+    out = []
+    for title, text in items:
+        if text and budget > 500:
+            out.append(f"=== {title} ===\n{text[:budget]}")
+            budget -= len(out[-1])
+    return "\n\n".join(out) or "(aucune source lisible)"
 
 
 def fiche_cours(subject, folder: Path, linked=()):
@@ -454,58 +579,139 @@ def fiche_cours(subject, folder: Path, linked=()):
     session += [f for f in linked if f not in session]
     if not session:
         raise RuntimeError("rien à analyser pour ce cours (ni enregistrement, ni document)")
-    subject_root = subject_dir(subject)
-    others = [p for p in readable_files(subject_root) if folder not in p.parents and p not in session]
+    items = []
+    for f in sorted(session, key=lambda f: not f.name.startswith("Transcription")):  # la transcription d'abord
+        t = scan(f, subject)  # déjà analysé à l'arrivée du document : lu dans le cache
+        items.append((f.name, t if len(t) <= 40000 or f.name.startswith("Transcription") else digest(f, subject)))
     prompt = f"""{BASE_PROMPT}
 
 ---
 MATIÈRE : {subject}
 SÉANCE : {folder.name}
 
-Sources de CETTE séance (lis-les toutes avec l'outil Read) :
-{file_list(session, folder)}
-
 La transcription a été produite automatiquement par Whisper : elle peut contenir des mots mal reconnus.
 Corrige-les d'après le contexte et les supports, sans inventer de contenu.
+{SCHEMA_RULE}
+{OUTPUT_RULE}
 
-Pour le contexte uniquement (séances et documents précédents de la matière, à consulter si utile, sans les résumer) :
-{file_list(others[:40], subject_root) or '- aucun'}
-{OUTPUT_RULE}"""
-    return claude(prompt, folder)
+SOURCES DE CETTE SÉANCE :
+{bundle(items, 200000)}"""
+    return claude(prompt, HERE)
 
 
-DS_PROMPT = """Tu prépares un étudiant à son prochain DS dans cette matière.
-Lis toutes les sources listées (fiches, transcriptions, supports, DS blancs, annales, TD).
+def session_day(p: Path):
+    m = re.search(r"COURS (\d{4}-\d{2}-\d{2})", p.as_posix())
+    return m and m.group(1)
+
+
+def subject_sources(subject, days=None):
+    """La matière en compact : fiches des cours en entier, puis résumé des autres documents
+    (une transcription déjà couverte par la fiche de son cours est ignorée).
+    days : seulement ces séances (+ les documents hors séance : TD, annales, supports)."""
+    files = [f for f in readable_files(subject_dir(subject)) if not re.match(r"(Synthèse|Prépa DS) ", f.name)]
+    if days is not None:
+        files = [f for f in files if not session_day(f) or session_day(f) in days]
+    covered = {f.parent for f in files if f.name == "Fiche de révision.md"}
+    fiches = [(f"Fiche du cours {f.parent.name}", scan(f)) for f in files if f.name == "Fiche de révision.md"]
+    others = [(f"{f.parent.name} / {f.name}", digest(f, subject)) for f in files if f.name != "Fiche de révision.md" and not (f.parent in covered and f.name.startswith("Transcription"))]
+    return fiches + others
+
+
+# ---------- Prépa DS : chaque notion au programme traitée, rien de plus ----------
+def ds_scope(subject, state):
+    """(notions au programme du prochain DS, précision du prof) : les notions cochées dans l'app, sinon tout le programme."""
+    notions = ((state.get("programmes") or {}).get(subject) or {}).get("notions") or []
+    today = datetime.now().strftime("%Y-%m-%d")
+    tasks = sorted((t for t in state.get("tasks") or [] if t["subject"] == subject and not t["done"] and t["due"][:10] >= today and t.get("scope")), key=lambda t: t["due"])
+    scope = json.loads(tasks[0]["scope"]) if tasks else {}
+    chosen = [n for n in notions if n["titre"] in (scope.get("notions") or [])] or notions
+    return chosen, scope.get("texte")
+
+
+DS_PROMPT = """Tu prépares un étudiant à son prochain DS de « {subject} ».
+Appuie-toi sur les sources ci-dessous (fiches des cours, résumés des transcriptions et des supports, TD, annales).
 
 Produis en Markdown :
 # PRÉPARATION AU DS — {subject}
-1. Ce qui va très probablement tomber : classement des notions/exercices du plus probable au moins probable, avec la justification tirée des sources (insistance du prof, répétitions, annales, TD).
-2. Types d'exercices et méthodes : pour chaque type, la méthode pas à pas et un exemple corrigé.
-3. Formules, définitions et chiffres à connaître par cœur.
-4. Pièges classiques.
-5. Un DS blanc complet dans le style des annales, puis son corrigé détaillé.
-6. Check-list de révision la veille.
+## Ce qui va tomber
+Classement des notions du plus probable au moins probable, justifié par les sources (insistance du prof, répétitions, TD, annales).
+{notions_part}
+## À savoir par cœur
+Formules, définitions, chiffres, acronymes, en tableau.
+## DS blanc
+Un DS blanc dans le style des annales et des TD, puis son corrigé détaillé.
+## Check-list de la veille
 Marque 🔥 TRÈS PROBABLE EN EXAMEN, ✅ À SAVOIR PAR CŒUR, ⚠️ PIÈGE CLASSIQUE."""
 
+NOTION_PART = """Puis UNE section par notion au programme, TOUTES, dans cet ordre, sans en sauter ni en fusionner aucune :
+{liste}
+Chaque section a pour titre exact « ## Notion N — titre » et contient : l'essentiel à comprendre, les définitions et formules exactes, le ou les schémas clés reconstruits en texte et expliqués, la méthode pas à pas avec un exemple corrigé, les pièges, et 2 questions types de DS avec leur réponse."""
 
-def fiche_revision(subject, mode):
-    root = subject_dir(subject)
-    files = readable_files(root)
-    head = DS_PROMPT.format(subject=subject) if mode == "ds" else BASE_PROMPT + "\n\nIci, fusionne TOUTES les séances de la matière en une seule fiche de synthèse globale."
-    prompt = f"""{head}
+
+def notion_list(notions, start=1):
+    return "\n".join(f"{start + i}. {n['titre']}" + (f" — {n['resume']}" if n.get("resume") else "") + (f" (séances {', '.join(n['seances'])})" if n.get("seances") else "") for i, n in enumerate(notions))
+
+
+def fiche_ds(subject, state):
+    notions, texte = ds_scope(subject, state)
+    days = None if not notions or any(not n.get("seances") for n in notions) else {d for n in notions for d in n["seances"]}
+    head = DS_PROMPT.format(subject=subject, notions_part=NOTION_PART.format(liste=notion_list(notions)) if notions else "## Notions\nUne section par notion du cours, avec méthode, exemple corrigé, schémas clés et pièges.")
+    if texte:
+        head += f"\n\nPÉRIMÈTRE ANNONCÉ : {texte}"
+    sources = bundle(subject_sources(subject, days), 220000)
+    md = claude(f"{head}\n{SCHEMA_RULE}\n{OUTPUT_RULE}\n\nSOURCES :\n{sources}", HERE)
+    # Vérification : chaque notion a sa section ; sinon un complément, seulement pour celles qui manquent
+    found = {int(k) for k in re.findall(r"^##\s*Notion\s*(\d+)", md, re.M)}
+    missing = [(i + 1, n) for i, n in enumerate(notions) if i + 1 not in found]
+    if missing:
+        log(f"prépa DS : {len(missing)} notion(s) manquante(s), complément…")
+        days = {d for _, n in missing for d in n.get("seances") or []} or None
+        extra = claude(f"""Complète la préparation au DS de « {subject} » : écris UNIQUEMENT les sections des notions suivantes, avec le titre exact « ## Notion N — titre » :
+{chr(10).join(f"{i}. {n['titre']}" + (f" — {n['resume']}" if n.get('resume') else '') for i, n in missing)}
+Chaque section : l'essentiel, définitions et formules exactes, schémas clés reconstruits en texte, méthode avec exemple corrigé, pièges, 2 questions types avec réponse.
+{SCHEMA_RULE}
+{OUTPUT_RULE}
+
+SOURCES :
+{bundle(subject_sources(subject, days), 120000)}""", HERE)
+        at = md.find("\n## À savoir par cœur")  # avec les autres notions, avant la fin de la fiche
+        md = md[:at] + "\n\n" + extra + "\n" + md[at:] if at >= 0 else md + "\n\n" + extra
+    return md
+
+
+def fiche_revision(subject, mode, state):
+    if mode == "ds":
+        return fiche_ds(subject, state)
+    prompt = f"""{BASE_PROMPT}
+
+Ici, fusionne TOUTES les séances de la matière en une seule fiche de synthèse globale.
+{SCHEMA_RULE}
 
 ---
 MATIÈRE : {subject}
-Sources (lis-les toutes avec l'outil Read) :
-{file_list(files, root)}
-{OUTPUT_RULE}"""
-    return claude(prompt, root)
+{OUTPUT_RULE}
+
+SOURCES :
+{bundle(subject_sources(subject), 220000)}"""
+    return claude(prompt, HERE)
 
 
 # ---------- Annonces de DS / devoirs dans les transcriptions ----------
 ANNONCES = HERE / "annonces.json"  # transcriptions déjà analysées
 ANNONCE_RE = re.compile(r"\b(DS|contr[ôo]les?|examens?|partiels?|interros?|[ée]valuations?|QCM|devoirs?|rendre|pr[ée]parer|pr[ée]parez|lire|lisez|faire|faites|r[ée]viser|r[ée]visez|exercices?|prochain cours|prochaine fois|pour (lundi|mardi|mercredi|jeudi|vendredi|la semaine))\b", re.I)
 JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+
+
+def passages(text, rx, around=600):
+    """Seulement les passages autour des mots qui comptent (fusionnés s'ils se chevauchent)."""
+    spans = []
+    for m in rx.finditer(text):
+        a, b = max(0, m.start() - around), m.end() + around
+        if spans and a <= spans[-1][1]:
+            spans[-1][1] = b
+        else:
+            spans.append([a, b])
+    return "\n[…]\n".join(text[a:b] for a, b in spans)
 
 
 def find_announcements(text, subject, day, approx, next_sessions=()):
@@ -525,9 +731,9 @@ Réponds UNIQUEMENT par un tableau JSON, sans texte autour :
 [{{"type": "ds" ou "devoir", "titre": "court et concret, ex. DS chapitres 1 à 3 / Faire l'exercice 4 du TD2", "date": "AAAA-MM-JJ", "heure": "HH:MM" ou null, "portee": "pour un DS : ce que le prof dit qu'il couvrira (chapitres, notions), sinon null", "citation": "phrase du prof"}}]
 Tableau vide [] si rien de clair.
 
-TRANSCRIPTION :
-{text[:150000]}"""
-    out = claude(prompt, HERE)
+PASSAGES DE LA TRANSCRIPTION (seuls ceux qui parlent de travail, de DS ou d'échéances) :
+{passages(text, ANNONCE_RE)[:40000]}"""
+    out = claude(prompt, HERE, model="haiku")
     m = re.search(r"\[.*\]", out, re.S)
     items = json.loads(m.group(0)) if m else []
     today = datetime.now().strftime("%Y-%m-%d")
@@ -675,27 +881,21 @@ def course_files(job, state):
 
 def analyse_programme(subject, state):
     """Liste des notions de la matière, dans l'ordre du cours, avec les séances où elles ont été vues."""
-    by_id = {v["id"]: ECAM / rel for rel, v in load_manifest().items() if v.get("id")}
-    dated = {}
-    for f in state["files"]:
-        path = by_id.get(f["id"])
-        if f["subject"] == subject and path and path.exists() and f.get("event_uid"):
-            for r in readable_files_of(path):
-                dated[r] = f["event_uid"][:10]
-    root = subject_dir(subject)
-    files = list(dict.fromkeys([*readable_files(root), *dated]))
+    dated = "\n".join(f"- {f['name']} : cours du {f['event_uid'][:10]}" for f in state["files"] if f["subject"] == subject and f.get("event_uid") and f["kind"] in ("doc", "transcript"))
     sessions = sorted({e["start"][:10] for e in state.get("events") or [] if e["subject"] == subject and e["start"][:10] <= datetime.now().strftime("%Y-%m-%d")})
-    liste = "\n".join(f"- {p}" + (f" (cours du {dated[p]})" if p in dated else "") for p in files)
     prompt = f"""Matière : « {subject} ». Séances déjà passées : {', '.join(sessions) or 'inconnues'}.
-Voici les documents de l'étudiant (transcriptions de cours, notes, supports, fiches). Lis-les avec l'outil Read : en priorité les fiches, transcriptions et notes, puis les supports pour compléter.
-{liste}
+Dates des documents rattachés à un cours :
+{dated or '- aucune'}
 
 Établis la liste des NOTIONS enseignées, dans l'ordre chronologique du cours :
 - 6 à 25 notions, assez précises pour qu'on puisse dire « elle est au programme du DS ou non » (ex. « Les 5 missions de l'ANSSI », pas « Cybersécurité ») ;
 - pour chacune : un titre court (60 caractères max), un résumé d'une phrase, les dates des séances où elle a été vue (parmi les séances ci-dessus, d'après les dates des documents ou leur contenu), et une importance de 1 (secondaire) à 3 (essentielle).
 Réponds UNIQUEMENT en JSON, sans texte autour :
-[{{"titre": "...", "resume": "...", "seances": ["AAAA-MM-JJ"], "importance": 1}}]"""
-    out = claude(prompt, root)
+[{{"titre": "...", "resume": "...", "seances": ["AAAA-MM-JJ"], "importance": 1}}]
+
+DOCUMENTS DE L'ÉTUDIANT (fiches des cours, puis résumés des transcriptions, notes et supports) :
+{bundle(subject_sources(subject), 150000)}"""
+    out = claude(prompt, HERE)
     m = re.search(r"\[.*\]", out, re.S)
     notions = [n for n in (json.loads(m.group(0)) if m else []) if n.get("titre")]
     if not notions:
@@ -720,7 +920,7 @@ def run_job(job, state):
         return md, "Fiche du cours", path
     mode = p.get("mode", "synthese")
     log(f"{'prépa DS' if mode == 'ds' else 'synthèse'} de {subject} avec Claude…")
-    md = fiche_revision(subject, mode)
+    md = fiche_revision(subject, mode, state)
     name = ("Prépa DS" if mode == "ds" else "Synthèse") + f" {datetime.now():%d-%m}"
     path = subject_dir(subject) / "FICHES" / f"{name}.md"
     path.parent.mkdir(exist_ok=True)
@@ -731,9 +931,15 @@ def run_job(job, state):
 FIRST = True
 
 
+TICKS = 0
+
+
 def tick():
-    global FIRST
+    global FIRST, TICKS
     jobs = call("/jobs")
+    TICKS += 1
+    if not jobs and not FIRST and TICKS % 5:
+        return  # ponytail: synchro complète toutes les 5 min quand rien n'attend (quota gratuit de lectures D1) ; les tâches restent vues chaque minute
     state = call("/state")
     relocate(state)
     pull_cloud(state)
@@ -770,7 +976,7 @@ def tick():
             call(f"/jobs/{job['id']}/failed", "POST", b"")
         state = call("/state")
     scan_announcements(state)
-    backfill_text(state)
+    backfill_docs(state)  # analyse unique des nouveaux documents (texte + schémas) et résumé
     FIRST = False
 
 
