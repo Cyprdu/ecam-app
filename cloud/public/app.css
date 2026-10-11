@@ -452,3 +452,44 @@ body.offline::before {
 }
 #rec-bar i { width: 8px; height: 8px; border-radius: 50%; background: #fff; animation: pulse 1.4s ease-in-out infinite; }
 #rec-bar i.paused { animation: none; opacity: .5; }
+
+/* ---------- Notes : moyenne, évolution, détail d'une note ---------- */
+.avg-card { padding: 16px 16px 12px; margin-bottom: 6px; }
+.avg-card > .s { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+.avg-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.avg-top .k { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12.5px; font-weight: 600; }
+.avg-top .k svg { width: 17px; height: 17px; }
+.avg-top .v { font-size: 34px; font-weight: 750; letter-spacing: -.035em; font-variant-numeric: tabular-nums; }
+.avg-top .v small { font-size: 16px; color: var(--muted); font-weight: 600; }
+.delta { font-weight: 700; font-variant-numeric: tabular-nums; font-size: 15px; text-align: right; white-space: nowrap; }
+.delta small { display: block; font-size: 11px; font-weight: 500; color: var(--muted); }
+.delta.up, .tip .up { color: var(--ok); }
+.delta.down, .tip .down { color: var(--danger); }
+.chart { position: relative; margin: 10px -4px 0; touch-action: pan-y; cursor: crosshair; }
+.chart svg { width: 100%; height: auto; display: block; overflow: visible; }
+.chart text { stroke: none; }
+.chart .grid { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.chart .ax { fill: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.chart .ln { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.chart .pt { fill: var(--accent); stroke: var(--bg); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.chart .cx { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.chart .tip { position: absolute; top: -6px; transform: translate(-50%, -100%); background: var(--ink); color: var(--on-ink); border-radius: 10px; padding: 6px 10px; font-size: 13px; white-space: nowrap; pointer-events: none; display: flex; gap: 6px; align-items: baseline; box-shadow: 0 6px 18px -6px #0006; }
+.chart .tip small { opacity: .7; font-size: 11.5px; }
+.chart .tip .up, .chart .tip .down { color: inherit; opacity: .8; }
+.note-hero { text-align: center; padding: 6px 0 18px; animation: enter .36s var(--ease); }
+.note-hero h1 { font-size: 22px; letter-spacing: -.02em; margin: 14px 0 4px; }
+.note-hero .sub { color: var(--muted); }
+.note-big { display: inline-flex; align-items: baseline; gap: 2px; font-size: 44px; font-weight: 780; letter-spacing: -.04em; font-variant-numeric: tabular-nums; padding: 18px 26px; border-radius: 26px; background: var(--fill); animation: vacIn .5s cubic-bezier(.2, .8, .2, 1) both; }
+.note-big small { font-size: 18px; font-weight: 600; opacity: .6; }
+.note-big.ok { background: var(--ok-soft); color: var(--ok); }
+.note-big.warn { background: var(--warn-soft); color: var(--warn); }
+.note-cmp { padding: 16px; display: grid; gap: 10px; }
+.note-cmp .s { color: var(--muted); font-size: 13px; }
+.cmp { display: grid; grid-template-columns: 54px 1fr 44px; align-items: center; gap: 10px; font-size: 14px; }
+.cmp b { text-align: right; font-variant-numeric: tabular-nums; }
+.track-bar { height: 10px; border-radius: 6px; background: var(--fill); overflow: hidden; }
+.track-bar i { display: block; height: 100%; border-radius: 6px; animation: grow .7s cubic-bezier(.2, .8, .2, 1) both; transform-origin: left; }
+.track-bar i.me { background: var(--accent); }
+.track-bar i.cls { background: var(--muted); opacity: .55; }
+@keyframes grow { from { transform: scaleX(0); } }
+.chart .tip[hidden] { display: none; }

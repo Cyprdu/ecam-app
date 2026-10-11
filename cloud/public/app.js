@@ -483,28 +483,141 @@ function vConnect(title, sub) {
 // ---------- Notes ----------
 const num = (g) => parseFloat(String(g).replace(',', '.'));
 
+// Moyenne pondérée par le barème (%) des notes chiffrées (AJ, ABS… ignorées)
+const noteAvg = (ns) => {
+  const ok = ns.filter((n) => !isNaN(num(n.grade)));
+  const w = ok.reduce((s, n) => s + (parseFloat(n.weight) || 100), 0);
+  return ok.length ? ok.reduce((s, n) => s + num(n.grade) * (parseFloat(n.weight) || 100), 0) / w : null;
+};
+// Moyenne générale indicative : moyenne des moyennes de matière (sans les coefficients ECTS, inconnus)
+function generalAvg(notes) {
+  const by = {};
+  for (const n of notes) (by[n.subject] ||= []).push(n);
+  const avgs = Object.values(by).map(noteAvg).filter((a) => a != null);
+  return avgs.length ? avgs.reduce((s, a) => s + a, 0) / avgs.length : null;
+}
+// Évolution : la moyenne recalculée à chaque date où une note est tombée
+function avgHistory(notes, avgOf = generalAvg) {
+  const days = [...new Set(notes.filter((n) => !isNaN(num(n.grade))).map((n) => n.date))].sort();
+  return days.map((d) => ({ date: d, v: avgOf(notes.filter((n) => n.date <= d)) })).filter((p) => p.v != null);
+}
+const noteId = (n) => encodeURIComponent(`${n.label}|${n.date}`);
+const fmt2 = (x) => x.toFixed(2).replace('.', ',');
+const signed = (x) => (x > 0 ? '+' : x < 0 ? '−' : '±') + fmt2(Math.abs(x));
+
+// Courbe d'évolution (une seule série) : trait 2 px, aire légère, grille discrète, curseur au doigt avec la valeur
+function lineChart(points, label) {
+  if (points.length < 2) return '';
+  const W = Math.round(Math.min(Math.max(innerWidth - 60, 300), 620)), H = 160, L = 30, R = 10, T = 12, B = 22; // largeur ≈ celle de l'écran : texte jamais déformé
+  const vs = points.map((p) => p.v);
+  let lo = Math.floor(Math.min(...vs) - 0.5), hi = Math.ceil(Math.max(...vs) + 0.5);
+  lo = Math.max(0, lo); hi = Math.min(20, Math.max(hi, lo + 2));
+  const t0 = Date.parse(points[0].date), t1 = Date.parse(points[points.length - 1].date) || t0 + 1;
+  const x = (d) => L + ((Date.parse(d) - t0) / (t1 - t0 || 1)) * (W - L - R);
+  const y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+  const line = points.map((p, i) => `${i ? 'L' : 'M'}${x(p.date).toFixed(1)},${y(p.v).toFixed(1)}`).join('');
+  const ticks = [lo, (lo + hi) / 2, hi];
+  const months = [...new Set(points.map((p) => p.date.slice(0, 7)))];
+  const last = points[points.length - 1];
+  const gid = 'g' + Math.random().toString(36).slice(2, 7);
+  return `<div class="chart" data-points='${esc(JSON.stringify(points.map((p) => [p.date, +p.v.toFixed(2)])))}' data-geom="${[W, H, L, R, T, B, lo, hi, t0, t1].join(',')}" role="img" aria-label="${esc(label)} : de ${fmt2(points[0].v)} à ${fmt2(last.v)}">
+    <svg viewBox="0 0 ${W} ${H}">
+      <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".22"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>
+      ${ticks.map((v) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text class="ax" x="${L - 6}" y="${y(v) + 3.5}" text-anchor="end">${Number.isInteger(v) ? v : v.toFixed(1).replace('.', ',')}</text>`).join('')}
+      ${months.map((m) => { const d = m + '-01', xx = Math.max(L, x(d)); return Date.parse(d) >= t0 - 15 * 864e5 ? `<text class="ax" x="${xx}" y="${H - 6}" text-anchor="${xx <= L + 4 ? 'start' : 'middle'}">${dFmt(d, { month: 'short' }).replace('.', '')}</text>` : ''; }).join('')}
+      <path d="${line}L${x(last.date)},${H - B}L${L},${H - B}Z" fill="url(#${gid})" stroke="none"/>
+      <path class="ln" d="${line}"/>
+      <circle class="pt" cx="${x(last.date)}" cy="${y(last.v)}" r="4.5"/>
+      <g class="cursor" style="display:none"><line class="cx" y1="${T}" y2="${H - B}"/><circle class="pt" r="4.5"/></g>
+    </svg>
+    <div class="tip" hidden></div>
+  </div>`;
+}
+function bindCharts(root) {
+  root.querySelectorAll('.chart').forEach((c) => {
+    const pts = JSON.parse(c.dataset.points), [W, H, L, R, T, B, lo, hi, t0, t1] = c.dataset.geom.split(',').map(Number);
+    const svg = c.querySelector('svg'), cur = c.querySelector('.cursor'), tip = c.querySelector('.tip');
+    const x = (d) => L + ((Date.parse(d) - t0) / (t1 - t0 || 1)) * (W - L - R), y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+    let lastI = -1;
+    const show = (ev) => {
+      const r = svg.getBoundingClientRect(), px = ((ev.clientX - r.left) / r.width) * W;
+      let i = 0;
+      pts.forEach((p, k) => { if (Math.abs(x(p[0]) - px) < Math.abs(x(pts[i][0]) - px)) i = k; });
+      const [d, v] = pts[i], cx = x(d), cy = y(v);
+      cur.style.display = ''; tip.hidden = false;
+      cur.querySelector('line').setAttribute('x1', cx); cur.querySelector('line').setAttribute('x2', cx);
+      cur.querySelector('circle').setAttribute('cx', cx); cur.querySelector('circle').setAttribute('cy', cy);
+      const prev = i ? v - pts[i - 1][1] : null;
+      tip.innerHTML = `<b>${fmt2(v)}</b>${prev != null ? `<span class="${prev >= 0 ? 'up' : 'down'}">${signed(prev)}</span>` : ''}<small>${dFmt(d, { day: 'numeric', month: 'long' })}</small>`;
+      tip.style.left = `${Math.min(Math.max((cx / W) * 100, 14), 86)}%`;
+      if (i !== lastI) { lastI = i; haptic('selection'); }
+    };
+    const hide = () => { cur.style.display = 'none'; tip.hidden = true; lastI = -1; };
+    c.onpointerdown = (ev) => { c.setPointerCapture(ev.pointerId); show(ev); };
+    c.onpointermove = (ev) => { if (ev.pointerType === 'mouse' || c.hasPointerCapture(ev.pointerId)) show(ev); };
+    c.onpointerup = c.onpointercancel = c.onpointerleave = hide;
+  });
+}
+
 function vNotes() {
   if (!S.ecamUser) return vConnect('Notes', 'Tes notes ECAM');
   const e = S.ecam || {};
   const notes = e.notes || [];
   const bySubject = {};
   for (const n of notes) (bySubject[n.subject] ||= []).push(n);
-  // Moyenne pondérée par le barème (%) des notes chiffrées (AJ, ABS… ignorées)
-  const avg = (ns) => {
-    const ok = ns.filter((n) => !isNaN(num(n.grade)));
-    const w = ok.reduce((s, n) => s + (parseFloat(n.weight) || 100), 0);
-    return ok.length ? ok.reduce((s, n) => s + num(n.grade) * (parseFloat(n.weight) || 100), 0) / w : null;
-  };
-  const subs = Object.entries(bySubject).map(([s, ns]) => [s, ns, avg(ns)]).sort((a, b) => b[1][0].date.localeCompare(a[1][0].date));
-  const avgs = subs.map(([, , a]) => a).filter((a) => a != null);
-  const general = avgs.length ? avgs.reduce((s, a) => s + a, 0) / avgs.length : null;
+  const subs = Object.entries(bySubject).map(([s, ns]) => [s, ns, noteAvg(ns)]).sort((a, b) => b[1][0].date.localeCompare(a[1][0].date));
+  const hist = avgHistory(notes);
+  const general = generalAvg(notes);
+  const delta = hist.length > 1 ? hist[hist.length - 1].v - hist[hist.length - 2].v : null;
   return `<div class="head"><div><h1>Notes</h1><div class="sub">${e.at ? 'Mis à jour ' + ago(e.at) : 'Première synchronisation…'}</div></div>
       <button class="icon-btn" id="e-sync" aria-label="Actualiser">${icon('refresh')}</button></div>
     ${e.error ? `<div class="banner">${esc(e.error)}</div>` : ''}
-    ${general != null ? `<div class="card tile" style="margin-bottom:6px"><span class="k">${icon('award')}Moyenne indicative</span><span class="v">${general.toFixed(2)}<small style="font-size:16px;color:var(--muted)"> /20</small></span><span class="s">Moyenne des matières, sans les coefficients ECTS</span></div>` : ''}
+    ${general != null ? `<div class="card avg-card">
+        <div class="avg-top"><div><span class="k">${icon('award')}Moyenne générale</span><div class="v">${fmt2(general)}<small> /20</small></div></div>
+        ${delta != null ? `<span class="delta ${delta >= 0 ? 'up' : 'down'}">${signed(delta)}<small>depuis la dernière note</small></span>` : ''}</div>
+        ${lineChart(hist, 'Évolution de la moyenne générale')}
+        <div class="s">Indicative : moyenne des matières, sans les coefficients ECTS. Touche la courbe pour voir chaque date.</div>
+      </div>` : ''}
     ${subs.length ? subs.map(([s, ns, a]) => `<div class="section-title"><span>${esc(s)}</span>${a != null ? `<span class="grade ${gradeClass(a)}" style="min-width:0;padding:2px 8px;text-transform:none">${a.toFixed(2)}</span>` : ''}</div>
-      <div class="list">${ns.map((n) => `<div class="row"><span class="grade ${gradeClass(n.grade)}">${esc(n.grade.replace('/20', ''))}</span><div class="grow"><div class="t">${esc(n.exam || n.label)}</div><div class="s wrap">${n.weight ? esc(n.weight) + ' · ' : ''}${n.average ? 'moy. classe ' + esc(n.average.replace('/20', '')) + ' · ' : ''}${dFmt(n.date, { day: 'numeric', month: 'short' })}${n.teacher ? ' · ' + esc(n.teacher) : ''}</div></div></div>`).join('')}</div>`).join('')
+      <div class="list">${ns.map((n) => `<a class="row" href="#note/${noteId(n)}"><span class="grade ${gradeClass(n.grade)}">${esc(n.grade.replace('/20', ''))}</span><div class="grow"><div class="t">${esc(n.exam || n.label)}</div><div class="s wrap">${n.average ? 'moy. classe ' + esc(n.average.replace('/20', '')) + ' · ' : ''}${dFmt(n.date, { day: 'numeric', month: 'short' })}</div></div>${icon('chevron-right', 'chev')}</a>`).join('')}</div>`).join('')
       : `<div class="empty">${icon('award')}<div>Aucune note pour l’instant.</div></div>`}`;
+}
+
+// Détail d'une note, en plein écran
+function vNote(id) {
+  const notes = S.ecam?.notes || [];
+  const n = notes.find((x) => noteId(x) === encodeURIComponent(id));
+  const back = `<a class="back" href="#notes">${icon('chevron-left')}Notes</a>`;
+  if (!n) return `${back}<div class="empty">${icon('award')}<div>Note introuvable (elle a peut-être changé sur l’intranet).</div></div>`;
+  const g = num(n.grade), cls = num(n.average), max = parseFloat(String(n.grade).split('/')[1]) || 20;
+  const same = notes.filter((x) => x.subject === n.subject);
+  const others = notes.filter((x) => x !== n);
+  const subjWith = noteAvg(same), subjWithout = noteAvg(same.filter((x) => x !== n));
+  const genWith = generalAvg(notes), genWithout = generalAvg(others);
+  const bar = (v, label, c) => `<div class="cmp"><span>${label}</span><div class="track-bar"><i class="${c}" style="width:${Math.max(2, (v / max) * 100)}%"></i></div><b>${fmt2(v)}</b></div>`;
+  const effect = (a, b, label) => (a != null && b != null ? `<div class="row"><div class="grow"><div class="t">${label}</div><div class="s">${fmt2(b)} → ${fmt2(a)}</div></div><span class="delta ${a - b >= 0 ? 'up' : 'down'}">${signed(a - b)}</span></div>` : '');
+  const subjHist = avgHistory(same, noteAvg);
+  return `${back}
+    <div class="note-hero">
+      <div class="note-big ${gradeClass(n.grade)}">${isNaN(g) ? esc(n.grade) : fmt2(g)}<small>/${max}</small></div>
+      <h1>${esc(n.exam || n.label)}</h1>
+      <div class="sub">${esc(n.subject)}</div>
+    </div>
+    ${!isNaN(g) && !isNaN(cls) ? `<div class="card note-cmp">
+      ${bar(g, 'Toi', 'me')}${bar(cls, 'Classe', 'cls')}
+      <div class="s">${g >= cls ? `${fmt2(g - cls)} point${g - cls >= 2 ? 's' : ''} au-dessus de la moyenne de la classe` : `${fmt2(cls - g)} point${cls - g >= 2 ? 's' : ''} sous la moyenne de la classe`}</div>
+    </div>` : ''}
+    <div class="section-title">Détails</div>
+    <div class="list">
+      <div class="row"><span class="lead">${icon('calendar')}</span><div class="grow"><div class="t">Date</div><div class="s">${longDay(n.date)}</div></div></div>
+      ${n.weight ? `<div class="row"><span class="lead">${icon('scale')}</span><div class="grow"><div class="t">Barème dans la matière</div><div class="s">${esc(n.weight)}</div></div></div>` : ''}
+      ${n.average ? `<div class="row"><span class="lead">${icon('users')}</span><div class="grow"><div class="t">Moyenne de la classe</div><div class="s">${esc(n.average)}</div></div></div>` : ''}
+      ${n.teacher ? `<div class="row"><span class="lead">${icon('user')}</span><div class="grow"><div class="t">Professeur</div><div class="s">${esc(n.teacher)}</div></div></div>` : ''}
+      <div class="row"><span class="lead">${icon('text')}</span><div class="grow"><div class="t">Intitulé complet</div><div class="s wrap">${esc(n.label)}</div></div></div>
+    </div>
+    ${!isNaN(g) ? `<div class="section-title">Effet de cette note</div><div class="list">${effect(subjWith, subjWithout, 'Moyenne de la matière')}${effect(genWith, genWithout, 'Moyenne générale')}${subjWithout == null ? '<div class="row"><div class="grow"><div class="s">Première note de la matière.</div></div></div>' : ''}</div>` : ''}
+    ${subjHist.length > 1 ? `<div class="section-title">Évolution en ${esc(n.subject)}</div><div class="card avg-card">${lineChart(subjHist, 'Évolution de la moyenne de la matière')}</div>` : ''}
+    ${same.length > 1 ? `<div class="section-title">Autres notes de la matière</div><div class="list">${same.filter((x) => x !== n).map((x) => `<a class="row" href="#note/${noteId(x)}"><span class="grade ${gradeClass(x.grade)}">${esc(x.grade.replace('/20', ''))}</span><div class="grow"><div class="t">${esc(x.exam || x.label)}</div><div class="s">${dFmt(x.date, { day: 'numeric', month: 'short' })}</div></div>${icon('chevron-right', 'chev')}</a>`).join('')}</div>` : ''}`;
 }
 
 // ---------- ECAM (soldes, liens, réglages) ----------
@@ -1093,14 +1206,14 @@ function render(animate = true, anim) {
   tabbar.hidden = false;
   const [route, arg] = location.hash.slice(1).split('/').map(decodeURIComponent);
   if (route === 'agenda' && /^\d{4}-\d{2}-\d{2}$/.test(arg || '')) selDay = arg;
-  const tab = { cours: 'agenda', matiere: 'devoirs', matieres: 'devoirs', rappels: 'devoirs', reglages: 'ecam', fiche: null }[route] ?? (route || 'agenda');
+  const tab = { cours: 'agenda', matiere: 'devoirs', matieres: 'devoirs', rappels: 'devoirs', reglages: 'ecam', note: 'notes', fiche: null }[route] ?? (route || 'agenda');
   const wide = matchMedia('(min-width: 1024px)').matches;
   tabbar.querySelectorAll('a').forEach((a) => a.classList.toggle('on', a.dataset.tab === (wide && route === 'reglages' ? 'reglages' : tab)));
   moveIndicator();
   const prevScroll = view.scrollTop;
   if (route === 'fiche') { if (animate) { vFiche(arg); view.scrollTop = 0; play('push'); } return; }
-  view.innerHTML = route === 'cours' ? vCours(arg) : route === 'matieres' ? vRappels('matieres') : route === 'assistant' ? vAssistant() : route === 'matiere' ? vMatiere(arg) : route === 'rappels' || route === 'devoirs' ? vRappels(arg) : route === 'notes' ? vNotes() : route === 'ecam' ? vEcam() : route === 'reglages' ? vReglages() : vAgenda();
-  if (animate) { play(/^(cours|matiere|reglages)$/.test(route) ? 'push' : 'enter'); view.scrollTop = 0; } else { view.scrollTop = prevScroll; if (anim) play(anim); }
+  view.innerHTML = route === 'cours' ? vCours(arg) : route === 'matieres' ? vRappels('matieres') : route === 'assistant' ? vAssistant() : route === 'matiere' ? vMatiere(arg) : route === 'rappels' || route === 'devoirs' ? vRappels(arg) : route === 'notes' ? vNotes() : route === 'note' ? vNote(arg) : route === 'ecam' ? vEcam() : route === 'reglages' ? vReglages() : vAgenda();
+  if (animate) { play(/^(cours|matiere|reglages|note)$/.test(route) ? 'push' : 'enter'); view.scrollTop = 0; } else { view.scrollTop = prevScroll; if (anim) play(anim); }
   bind(route, arg);
 }
 
@@ -1217,6 +1330,7 @@ function bindRows(root) {
 
 function bind(route, arg) {
   bindRows(view);
+  bindCharts(view);
   if (route === 'agenda' || !route) { centerDay(); wheelDays(); pagerTouch(); }
   view.querySelectorAll('[data-file]').forEach((b) => (b.onclick = () => openFile(b.dataset.file)));
   view.querySelectorAll('[data-prog]').forEach((b) => (b.onclick = () => askProgramme(b.dataset.prog)));
@@ -1305,7 +1419,7 @@ let swipe = null;
 addEventListener('touchstart', (e) => {
   if (NATIVE) return; // dans l'app iPhone, c'est le geste natif d'iOS qui fait le retour
   const t = e.touches[0];
-  swipe = t.clientX < 24 && /^#(cours|matiere|fiche|reglages)/.test(location.hash) ? { x: t.clientX, y: t.clientY } : null;
+  swipe = t.clientX < 24 && /^#(cours|matiere|fiche|reglages|note)/.test(location.hash) ? { x: t.clientX, y: t.clientY } : null;
 }, { passive: true });
 addEventListener('touchend', (e) => {
   const t = e.changedTouches[0];
