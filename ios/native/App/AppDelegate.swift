@@ -12,7 +12,20 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         window?.rootViewController = EcamViewController()
         window?.makeKeyAndVisible()
         UNUserNotificationCenter.current().delegate = self
+        Recorder.recoverInterrupted()      // enregistrement interrompu (app tuée, plantage) → réassemblé et envoyé
+        Uploader.shared.resumePending()    // envois annulés ou échoués → relancés
         return true
+    }
+
+    func applicationDidBecomeActive(_ application: UIApplication) {
+        Recorder.recoverInterrupted()
+        Uploader.shared.resumePending()
+    }
+
+    // Fermée depuis le sélecteur d'apps pendant un enregistrement : on finalise la tranche en cours (fichier lisible),
+    // l'envoi se fera à la prochaine ouverture
+    func applicationWillTerminate(_ application: UIApplication) {
+        Recorder.shared.terminate()
     }
 
     // Envois terminés pendant que l'app était en arrière-plan (voir Uploader)
@@ -39,6 +52,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
     }
 
     func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
-        ApplicationDelegateProxy.shared.application(app, open: url, options: options)
+        if url.isFileURL { Incoming.shared.receive(url); return true } // « Partager › ECAM »
+        return ApplicationDelegateProxy.shared.application(app, open: url, options: options)
     }
 }

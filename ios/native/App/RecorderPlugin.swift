@@ -22,7 +22,45 @@ public class RecorderPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "notifStatus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "notifEnable", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "schedule", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "pending", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "retry", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "incoming", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "sendShared", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "dropShared", returnType: CAPPluginReturnPromise),
     ]
+
+    // ---------- Documents reçus par « Partager › ECAM » ----------
+    override public func load() {
+        Incoming.shared.onReceive = { [weak self] in self?.notifyListeners("shared", data: [:]) }
+    }
+
+    @objc func incoming(_ call: CAPPluginCall) {
+        call.resolve(["items": Incoming.shared.list()])
+    }
+
+    @objc func sendShared(_ call: CAPPluginCall) {
+        guard let path = call.getString("path"), let raw = call.getString("uploadUrl"), let url = URL(string: raw) else { return call.reject("paramètres manquants") }
+        let ok = Incoming.shared.send(path: path, uploadURL: url, subject: call.getString("subject") ?? "", uid: call.getString("uid") ?? "")
+        ok ? call.resolve() : call.reject("Document introuvable")
+    }
+
+    @objc func dropShared(_ call: CAPPluginCall) {
+        Incoming.shared.drop(path: call.getString("path") ?? "")
+        call.resolve()
+    }
+
+    // ---------- Enregistrements gardés sur le téléphone tant que le serveur ne les a pas reçus ----------
+    @objc func pending(_ call: CAPPluginCall) {
+        Uploader.shared.pendingList { call.resolve(["items": $0]) }
+    }
+
+    @objc func retry(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            Recorder.recoverInterrupted()
+            Uploader.shared.resumePending(uploadURL: call.getString("uploadUrl").flatMap(URL.init))
+            call.resolve()
+        }
+    }
 
     // ---------- Rappels (notifications locales : le Web Push n'existe pas dans l'app installée par SideStore) ----------
     @objc func notifStatus(_ call: CAPPluginCall) {

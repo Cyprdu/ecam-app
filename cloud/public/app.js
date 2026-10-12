@@ -302,7 +302,8 @@ function vCours(uid) {
       <button class="card action" id="add-task">${icon('list-plus')}Devoir</button>
     </div>
     ${(audio.length || docs.length) && !jobs.some((j) => JSON.parse(j.params || '{}').ready || j.status === 'running') ? `<div class="list" style="margin-top:10px"><button class="row" id="fiche-now"><span class="lead">${icon('sparkles')}</span><div class="grow"><div class="t">${fiches.length ? 'Refaire la fiche maintenant' : 'Faire la fiche maintenant'}</div><div class="s">Avec ${[audio.filter((f) => f.kind === 'audio').length && audio.filter((f) => f.kind === 'audio').length + ' enregistrement(s)', docs.length && docs.length + ' document(s)'].filter(Boolean).join(' et ') || 'ce qui est envoyé'}, sans attendre</div></div></button></div>` : ''}
-    <div class="list" style="margin-top:10px"><button class="row" data-ask="cours"><span class="lead">${icon('sparkles')}</span><div class="grow"><div class="t">Demander à Claude</div><div class="s">Explique-moi ce cours, fais-en une fiche…</div></div>${icon('chevron-right', 'chev')}</button></div>
+    <div class="list" style="margin-top:10px"><button class="row" data-ask="cours"><span class="lead">${icon('sparkles')}</span><div class="grow"><div class="t">Demander à Claude</div><div class="s">Explique-moi ce cours, fais-en une fiche…</div></div>${icon('chevron-right', 'chev')}</button>
+      <button class="row" id="add-transcript"><span class="lead">${icon('text')}</span><div class="grow"><div class="t">Ajouter la transcription en texte</div><div class="s">Texte du cours tapé ou collé, à la place ou en plus de l’audio</div></div>${icon('chevron-right', 'chev')}</button></div>
     ${fiches.length || jobs.length ? `<div class="section-title">Fiche de révision</div><div class="list">${fiches.map((f) => `<a class="row" href="#fiche/${f.id}"><span class="lead">${icon('sparkles')}</span><div class="grow"><div class="t">${esc(f.name)}</div><div class="s">Prête · ${dFmt(f.created, { day: 'numeric', month: 'short' })}</div></div>${icon('chevron-right', 'chev')}</a>`).join('')}${jobRows(jobs)}</div>` : ''}
     ${tasks.length ? `<div class="section-title">Devoirs</div><div class="list">${tasks.map((t) => reminderRow({ ...t, isTask: true })).join('')}</div>` : ''}
     <div class="section-title">Documents</div>
@@ -445,6 +446,7 @@ function vReglages() {
       <div class="row"><span class="lead">${icon('bell')}</span><div class="grow"><div class="t">Rappels et fiches prêtes</div><div class="s">${perm === 'granted' ? (NATIVE ? 'Activées : DS et devoirs rappelés 3 jours avant, la veille et le jour même' : 'Activées sur cet appareil') : perm === 'denied' ? 'Refusées — à réactiver dans Réglages iOS › ECAM › Notifications' : perm === 'old' ? 'Mets à jour l’app avec le dernier ECAM.ipa (SideStore)' :perm === 'unsupported' ? 'Installe l\'app pour les activer' : 'Désactivées'}</div></div></div>
     </div>
     <div style="margin-top:10px">${perm === 'granted' ? `<button class="btn secondary" id="test-push">Envoyer une notification de test</button>` : `<button class="btn" id="enable-push" ${['unsupported', 'denied', 'old'].includes(perm) ? 'disabled' : ''}>Activer les notifications</button>`}</div>
+    ${pendingSection()}
     <div class="section-title">Ordinateur</div>
     <div class="list"><div class="row"><span class="lead">${icon('monitor')}</span><div class="grow"><div class="t">Transcription et IA</div><div class="s">${seen === null ? 'Jamais connecté' : seen < 5 ? 'Connecté' : `Vu il y a ${seen < 120 ? seen + ' min' : Math.round(seen / 60) + ' h'}`}</div></div></div></div>
     <div class="section-title">Compte ECAM</div>
@@ -870,6 +872,84 @@ function moveSheet(f) {
   });
 }
 
+// ---------- Documents partagés à l'app iPhone (« Partager › ECAM ») ----------
+const plainWords = (s) => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
+const shiftMin = (t, m) => new Date(Date.parse(t + ':00Z') + m * 6e4).toISOString().slice(0, 16);
+// Proposition de rangement : la matière citée dans le titre, et le cours en cours / qui vient de finir (sinon le dernier)
+function guessCourse(fileName) {
+  const now = nowStr(), name = plainWords(fileName);
+  const score = (s) => plainWords(s).filter((w) => w.length >= 4 && name.some((n) => w.startsWith(n) || n.startsWith(w))).length;
+  const best = subjects().map((s) => [score(s), s]).sort((a, b) => b[0] - a[0])[0];
+  const live = S.events.find((e) => e.start <= shiftMin(now, 15) && shiftMin(e.end || e.start, 45) >= now); // ±, pour une photo prise en fin de cours
+  const subject = best?.[0] > 0 ? best[1] : live?.subject || subjects()[0];
+  const past = S.events.filter((e) => e.subject === subject && e.start <= shiftMin(now, 15)).sort((a, b) => b.start.localeCompare(a.start));
+  const ev = live?.subject === subject ? live : past[0];
+  return { subject, uid: ev?.uid || '', why: best?.[0] > 0 ? 'd’après le titre' : live ? 'cours en cours' : '' };
+}
+let shareBusy = false;
+async function checkShared() {
+  if (!NATIVE?.incoming || shareBusy || !KEY) return;
+  const { items = [] } = await NATIVE.incoming().catch(() => ({}));
+  if (items.length) shareSheet(items[0], items.length);
+}
+function shareSheet(item, count) {
+  shareBusy = true;
+  const g = guessCourse(item.name);
+  const sessions = (s) => S.events.filter((e) => e.subject === s && e.start <= shiftMin(nowStr(), 15)).reverse();
+  const options = (s, sel) => `<option value="">Aucun cours précis (matière seulement)</option>` + sessions(s).map((e) => `<option value="${esc(e.uid)}" ${e.uid === sel ? 'selected' : ''}>${dFmt(e.start, { weekday: 'short', day: 'numeric', month: 'short' })} · ${e.start.slice(11, 16)} · ${esc(e.type || '')}</option>`).join('');
+  openSheet(`<h2>${icon('file-plus')} Ranger le document</h2>
+    <div class="list" style="margin-bottom:14px"><div class="row"><span class="lead">${icon('file')}</span><div class="grow"><div class="t">${esc(item.name)}</div><div class="s">${size(item.size)}${count > 1 ? ` · encore ${count - 1} après celui-ci` : ''}</div></div></div></div>
+    <label class="field"><span>Matière${g.why ? ` <small class="note">proposée ${g.why}</small>` : ''}</span><select id="sh-subject">${subjects().map((s) => `<option ${s === g.subject ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select></label>
+    <label class="field"><span>Cours</span><select id="sh-session">${options(g.subject, g.uid)}</select></label>
+    <button class="btn" id="sh-send">Ajouter</button>
+    <button class="btn secondary" id="sh-drop" style="margin-top:8px">Ne pas l’ajouter</button>
+    <p class="note">Il sera lu (texte et schémas) et utilisé pour la fiche du cours.</p>`, (sh) => {
+    $('#sh-subject', sh).onchange = (ev) => ($('#sh-session', sh).innerHTML = options(ev.target.value, ''));
+    const next = () => { shareBusy = false; closeSheet(); setTimeout(checkShared, 350); };
+    $('#sh-send', sh).onclick = async () => {
+      try { await NATIVE.sendShared({ path: item.path, uploadUrl: await linkFor('upload'), subject: $('#sh-subject', sh).value, uid: $('#sh-session', sh).value }); toast('Envoi en cours — tu seras notifié'); }
+      catch (e) { return toast(e.message); }
+      haptic('success'); next(); setTimeout(refresh, 4000);
+    };
+    $('#sh-drop', sh).onclick = async () => { await NATIVE.dropShared({ path: item.path }); next(); };
+  });
+  // Fermée sans choisir : le document reste en attente, la feuille reviendra
+  const obs = new MutationObserver(() => { if ($('#sheet').hidden) { shareBusy = false; obs.disconnect(); } });
+  obs.observe($('#sheet'), { attributes: true, attributeFilter: ['hidden'] });
+}
+
+// ---------- Enregistrements gardés sur l'iPhone tant que le serveur ne les a pas reçus ----------
+let nativePending = [];
+async function syncPending(announce) {
+  if (!NATIVE?.pending || !KEY) return;
+  await NATIVE.retry({ uploadUrl: await linkFor('upload') }).catch(() => {}); // relance tout ce qui n'est pas parti
+  const before = nativePending.length;
+  nativePending = ((await NATIVE.pending().catch(() => ({}))).items || []);
+  if (announce && nativePending.length) toast(`${nativePending.length} envoi(s) gardé(s) sur l’iPhone : envoi en cours`, 4000);
+  if (before !== nativePending.length && location.hash === '#reglages') render(false);
+}
+const pendingSection = () => (NATIVE?.pending ? `<div class="section-title">Sur cet iPhone</div>
+    <div class="list">${nativePending.length ? nativePending.map((p) => `<div class="row"><span class="lead">${icon(/\.m4a$|^Cours /.test(p.name) ? 'mic' : 'file')}</span><div class="grow"><div class="t">${esc(p.name.replace(/^[0-9A-F]{8}-/, ''))}</div><div class="s">${size(p.size)} · ${p.sending ? 'envoi en cours' : 'en attente d’envoi'}</div></div></div>`).join('')
+      : `<div class="row"><span class="lead">${icon('check')}</span><div class="grow"><div class="t">Tout est envoyé</div><div class="s">Un enregistrement reste sur l’iPhone tant que le serveur ne l’a pas reçu</div></div></div>`}</div>
+    ${nativePending.length ? `<div style="margin-top:10px"><button class="btn secondary" id="retry-pending">Renvoyer maintenant</button></div>` : ''}` : '');
+
+// ---------- Transcription ajoutée à la main (texte collé, notes tapées…) ----------
+function transcriptSheet(ev) {
+  openSheet(`<h2>${icon('text')} Transcription du cours</h2>
+    <p class="note" style="margin-top:-8px">Colle ou tape le texte du cours : il sert comme une transcription automatique (fiche, Claude).</p>
+    <label class="field"><textarea id="tr-text" rows="10" placeholder="Texte du cours…" style="width:100%;min-height:220px;resize:vertical;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--card)"></textarea></label>
+    <button class="btn" id="tr-save">Ajouter au cours</button>`, (sh) => {
+    $('#tr-save', sh).onclick = async () => {
+      const text = $('#tr-text', sh).value.trim();
+      if (text.length < 20) return toast('Le texte est trop court');
+      const q = new URLSearchParams({ kind: 'transcript', subject: ev.subject, uid: ev.uid, name: 'Transcription (ajoutée à la main)' });
+      try { await api('/files?' + q, { method: 'POST', body: text, headers: { 'content-type': 'text/plain; charset=utf-8' } }); }
+      catch (e) { return toast(e.message); }
+      haptic('success'); closeSheet(); toast('Transcription ajoutée'); refresh();
+    };
+  });
+}
+
 let uploadCtx = null;
 function pickDocs(ctx) { uploadCtx = ctx; $('#picker').click(); }
 $('#picker').onchange = async (ev) => {
@@ -1132,7 +1212,9 @@ async function enableNativeNotifs() {
 }
 if (NATIVE) {
   NATIVE.notifStatus().then((r) => { nativePerm = r.status; scheduleNative(); if (location.hash === '#reglages') render(false); }).catch(() => { nativePerm = 'old'; });
-  addEventListener('ecam-state', () => scheduleNative());
+  addEventListener('ecam-state', () => { scheduleNative(); checkShared(); syncPending(); });
+  NATIVE.addListener?.('shared', () => checkShared()); // document reçu pendant que l'app est ouverte
+  setTimeout(() => syncPending(true), 1500); // à l'ouverture : enregistrements restés sur le téléphone → renvoyés
   recBar();
   document.addEventListener('visibilitychange', () => { if (!document.hidden) recBar(); });
   // Petit retour haptique sur les éléments qu'on touche, comme une app iOS
@@ -1360,6 +1442,8 @@ function bind(route, arg) {
     try { await api('/courses/fiche', { method: 'POST', json: { uid: ev.uid } }); toast('C’est parti : la fiche se fait dès que ton PC est allumé'); refresh(); }
     catch (e) { toast(e.message); }
   });
+  on('add-transcript', () => transcriptSheet(ev));
+  on('retry-pending', async () => { await syncPending(); toast(nativePending.length ? 'Envoi relancé' : 'Tout est envoyé'); });
   on('add-doc', () => pickDocs(ev ? { subject: ev.subject, uid: ev.uid } : { subject: arg }));
   on('add-task', () => taskSheet(ev ? { subject: ev.subject, event_uid: ev.uid, due: ev.start } : { subject: subjects()[0], due: todayStr() + 'T08:00' }));
   on('hide-subject', async () => { await api('/subjects', { method: 'POST', json: { name: arg, hidden: 1 } }); location.hash = '#matieres'; refresh(); });

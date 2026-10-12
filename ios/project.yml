@@ -31,6 +31,13 @@ targets:
         NSMicrophoneUsageDescription: "Pour enregistrer tes cours (ils sont transcrits et transformés en fiches)."
         UIBackgroundModes: [audio, fetch]
         NSSupportsLiveActivities: true
+        UIFileSharingEnabled: true                 # enregistrements visibles dans Fichiers › Sur mon iPhone › ECAM
+        LSSupportsOpeningDocumentsInPlace: true
+        # « Partager › ECAM » depuis Fichiers, Mail, Safari… : n'importe quel document
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Document
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [public.item, public.data, public.content]
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
     settings:

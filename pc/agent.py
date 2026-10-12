@@ -793,8 +793,8 @@ def transcribe_audios(job, state):
             remember(transcript, cloud)
             continue
         audio = next((f for f in state["files"] if f["id"] == aid), None)
-        if not audio:
-            continue  # supprimé dans l'app : on ne le traite plus, même s'il en reste une copie sur le PC
+        if not audio or audio["size"] < 4000:
+            continue  # supprimé dans l'app, ou envoi vide : on ne le traite pas
         audio_path = local_path(aid) or folder / f"Enregistrement {aid[:8]}{audio_ext(audio)}"
         if not audio_path.exists():
             log("téléchargement de l'audio…")
@@ -802,7 +802,12 @@ def transcribe_audios(job, state):
             remember(audio_path, aid)
         log("transcription…", audio_path.name)
         t0 = time.time()
-        transcript.write_text(transcribe(audio_path, subject, p.get("teacher")), encoding="utf-8")
+        try:
+            text = transcribe(audio_path, subject, p.get("teacher"))
+        except Exception as e:  # fichier abîmé : il ne doit pas bloquer les autres enregistrements du cours
+            log("ÉCHEC transcription de", audio_path.name, ":", e)
+            continue
+        transcript.write_text(text, encoding="utf-8")
         log(f"transcrit en {time.time() - t0:.0f} s")
         res = upload("transcript", subject, job["event_uid"], "Transcription", transcript.read_bytes(), "text/plain; charset=utf-8", parent=aid)
         remember(transcript, res["id"])
@@ -874,7 +879,14 @@ def course_files(job, state):
     out = []
     for f in state["files"]:
         path = by_id.get(f["id"])
-        if f.get("event_uid") == job["event_uid"] and f["kind"] in ("doc", "transcript") and path and path.exists():
+        if f.get("event_uid") != job["event_uid"] or f["kind"] not in ("doc", "transcript"):
+            continue
+        if not (path and path.exists()) and f["kind"] == "transcript" and not f.get("parent"):
+            # transcription tapée ou collée dans l'app : récupérée dans le dossier du cours
+            path = session_dir(job["subject"], job["event_uid"]) / f"Transcription {f['id'][:8]}.txt"
+            download(f["id"], path)
+            remember(path, f["id"])
+        if path and path.exists():
             out += readable_files_of(path)
     return out
 
