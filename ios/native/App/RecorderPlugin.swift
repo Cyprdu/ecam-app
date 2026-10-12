@@ -39,13 +39,13 @@ public class RecorderPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func sendShared(_ call: CAPPluginCall) {
-        guard let path = call.getString("path"), let raw = call.getString("uploadUrl"), let url = URL(string: raw) else { return call.reject("paramètres manquants") }
-        let ok = Incoming.shared.send(path: path, uploadURL: url, subject: call.getString("subject") ?? "", uid: call.getString("uid") ?? "")
+        guard let name = call.getString("name"), let raw = call.getString("uploadUrl"), let url = URL(string: raw) else { return call.reject("paramètres manquants") }
+        let ok = Incoming.shared.send(name: name, uploadURL: url, subject: call.getString("subject") ?? "", uid: call.getString("uid") ?? "")
         ok ? call.resolve() : call.reject("Document introuvable")
     }
 
     @objc func dropShared(_ call: CAPPluginCall) {
-        Incoming.shared.drop(path: call.getString("path") ?? "")
+        Incoming.shared.drop(name: call.getString("name") ?? "")
         call.resolve()
     }
 

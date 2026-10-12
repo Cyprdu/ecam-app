@@ -886,14 +886,18 @@ function guessCourse(fileName) {
   const ev = live?.subject === subject ? live : past[0];
   return { subject, uid: ev?.uid || '', why: best?.[0] > 0 ? 'd’après le titre' : live ? 'cours en cours' : '' };
 }
-let shareBusy = false;
-async function checkShared() {
+let shareBusy = false, sharedWaiting = 0;
+const shareSkipped = new Set(); // fermés sans choix : plus reproposés d'eux-mêmes (ils attendent dans Réglages)
+async function checkShared(all) {
   if (!NATIVE?.incoming || shareBusy || !KEY) return;
   const { items = [] } = await NATIVE.incoming().catch(() => ({}));
-  if (items.length) shareSheet(items[0], items.length);
+  sharedWaiting = items.length;
+  const todo = all ? items : items.filter((i) => !shareSkipped.has(i.name));
+  if (todo.length) shareSheet(todo[0], todo.length);
 }
 function shareSheet(item, count) {
   shareBusy = true;
+  let chosen = false;
   const g = guessCourse(item.name);
   const sessions = (s) => S.events.filter((e) => e.subject === s && e.start <= shiftMin(nowStr(), 15)).reverse();
   const options = (s, sel) => `<option value="">Aucun cours précis (matière seulement)</option>` + sessions(s).map((e) => `<option value="${esc(e.uid)}" ${e.uid === sel ? 'selected' : ''}>${dFmt(e.start, { weekday: 'short', day: 'numeric', month: 'short' })} · ${e.start.slice(11, 16)} · ${esc(e.type || '')}</option>`).join('');
@@ -905,16 +909,16 @@ function shareSheet(item, count) {
     <button class="btn secondary" id="sh-drop" style="margin-top:8px">Ne pas l’ajouter</button>
     <p class="note">Il sera lu (texte et schémas) et utilisé pour la fiche du cours.</p>`, (sh) => {
     $('#sh-subject', sh).onchange = (ev) => ($('#sh-session', sh).innerHTML = options(ev.target.value, ''));
-    const next = () => { shareBusy = false; closeSheet(); setTimeout(checkShared, 350); };
+    const next = () => { chosen = true; shareBusy = false; closeSheet(); setTimeout(() => checkShared(), 400); };
     $('#sh-send', sh).onclick = async () => {
-      try { await NATIVE.sendShared({ path: item.path, uploadUrl: await linkFor('upload'), subject: $('#sh-subject', sh).value, uid: $('#sh-session', sh).value }); toast('Envoi en cours — tu seras notifié'); }
-      catch (e) { return toast(e.message); }
+      try { await NATIVE.sendShared({ name: item.name, path: item.path, uploadUrl: await linkFor('upload'), subject: $('#sh-subject', sh).value, uid: $('#sh-session', sh).value }); toast('Envoi en cours — tu seras notifié'); }
+      catch (e) { shareSkipped.add(item.name); return toast(e.message + ' — mets à jour l’app (dernier ECAM.ipa)', 5000); }
       haptic('success'); next(); setTimeout(refresh, 4000);
     };
-    $('#sh-drop', sh).onclick = async () => { await NATIVE.dropShared({ path: item.path }); next(); };
+    $('#sh-drop', sh).onclick = async () => { shareSkipped.add(item.name); await NATIVE.dropShared({ name: item.name, path: item.path }).catch(() => {}); next(); };
   });
   // Fermée sans choisir : le document reste en attente, la feuille reviendra
-  const obs = new MutationObserver(() => { if ($('#sheet').hidden) { shareBusy = false; obs.disconnect(); } });
+  const obs = new MutationObserver(() => { if ($('#sheet').hidden) { if (!chosen) shareSkipped.add(item.name); shareBusy = false; obs.disconnect(); } });
   obs.observe($('#sheet'), { attributes: true, attributeFilter: ['hidden'] });
 }
 
@@ -931,7 +935,8 @@ async function syncPending(announce) {
 const pendingSection = () => (NATIVE?.pending ? `<div class="section-title">Sur cet iPhone</div>
     <div class="list">${nativePending.length ? nativePending.map((p) => `<div class="row"><span class="lead">${icon(/\.m4a$|^Cours /.test(p.name) ? 'mic' : 'file')}</span><div class="grow"><div class="t">${esc(p.name.replace(/^[0-9A-F]{8}-/, ''))}</div><div class="s">${size(p.size)} · ${p.sending ? 'envoi en cours' : 'en attente d’envoi'}</div></div></div>`).join('')
       : `<div class="row"><span class="lead">${icon('check')}</span><div class="grow"><div class="t">Tout est envoyé</div><div class="s">Un enregistrement reste sur l’iPhone tant que le serveur ne l’a pas reçu</div></div></div>`}</div>
-    ${nativePending.length ? `<div style="margin-top:10px"><button class="btn secondary" id="retry-pending">Renvoyer maintenant</button></div>` : ''}` : '');
+    ${nativePending.length ? `<div style="margin-top:10px"><button class="btn secondary" id="retry-pending">Renvoyer maintenant</button></div>` : ''}
+    ${sharedWaiting ? `<div style="margin-top:10px"><button class="btn" id="file-shared">Ranger ${sharedWaiting} document${sharedWaiting > 1 ? 's' : ''} reçu${sharedWaiting > 1 ? 's' : ''}</button></div>` : ''}` : '');
 
 // ---------- Transcription ajoutée à la main (texte collé, notes tapées…) ----------
 function transcriptSheet(ev) {
@@ -1212,7 +1217,9 @@ async function enableNativeNotifs() {
 }
 if (NATIVE) {
   NATIVE.notifStatus().then((r) => { nativePerm = r.status; scheduleNative(); if (location.hash === '#reglages') render(false); }).catch(() => { nativePerm = 'old'; });
-  addEventListener('ecam-state', () => { scheduleNative(); checkShared(); syncPending(); });
+  addEventListener('ecam-state', () => { scheduleNative(); syncPending(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(() => checkShared(), 600); });
+  setTimeout(() => checkShared(), 1200);
   NATIVE.addListener?.('shared', () => checkShared()); // document reçu pendant que l'app est ouverte
   setTimeout(() => syncPending(true), 1500); // à l'ouverture : enregistrements restés sur le téléphone → renvoyés
   recBar();
@@ -1443,6 +1450,7 @@ function bind(route, arg) {
     catch (e) { toast(e.message); }
   });
   on('add-transcript', () => transcriptSheet(ev));
+  on('file-shared', () => checkShared(true));
   on('retry-pending', async () => { await syncPending(); toast(nativePending.length ? 'Envoi relancé' : 'Tout est envoyé'); });
   on('add-doc', () => pickDocs(ev ? { subject: ev.subject, uid: ev.uid } : { subject: arg }));
   on('add-task', () => taskSheet(ev ? { subject: ev.subject, event_uid: ev.uid, due: ev.start } : { subject: subjects()[0], due: todayStr() + 'T08:00' }));

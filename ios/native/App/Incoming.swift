@@ -37,9 +37,16 @@ final class Incoming {
     }
 
     /// Range le document (matière et cours choisis dans l'app) : il part dans la file d'envoi, supprimé une fois reçu.
-    func send(path: String, uploadURL: URL, subject: String, uid: String) -> Bool {
-        let src = URL(fileURLWithPath: path)
-        guard src.path.hasPrefix(Incoming.folder.path), FileManager.default.fileExists(atPath: path) else { return false }
+    /// Retrouve un document reçu par son NOM (pas par son chemin : iOS écrit le même dossier « /var/… » ou
+    /// « /private/var/… », et un accent peut être encodé de deux façons — c'était le « Document introuvable »)
+    private func file(named name: String) -> URL? {
+        let key = name.precomposedStringWithCanonicalMapping
+        return ((try? FileManager.default.contentsOfDirectory(at: Incoming.folder, includingPropertiesForKeys: nil)) ?? [])
+            .first { $0.lastPathComponent.precomposedStringWithCanonicalMapping == key }
+    }
+
+    func send(name: String, uploadURL: URL, subject: String, uid: String) -> Bool {
+        guard let src = file(named: name) else { return false }
         var target = URLComponents(url: uploadURL, resolvingAgainstBaseURL: false)!
         target.queryItems = [URLQueryItem(name: "kind", value: "doc"), URLQueryItem(name: "subject", value: subject), URLQueryItem(name: "uid", value: uid)]
         let dest = Uploader.outbox.appendingPathComponent(String(UUID().uuidString.prefix(8)) + "-" + src.lastPathComponent)
@@ -49,8 +56,8 @@ final class Incoming {
         return true
     }
 
-    func drop(path: String) {
-        guard path.hasPrefix(Incoming.folder.path) else { return }
-        try? FileManager.default.removeItem(atPath: path)
+    func drop(name: String) {
+        guard let f = file(named: name) else { return }
+        try? FileManager.default.removeItem(at: f)
     }
 }
