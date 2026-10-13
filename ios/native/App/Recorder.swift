@@ -113,7 +113,8 @@ final class Recorder: NSObject {
         guard let rec = recorder, let dir = folder else { return nil }
         let duration = elapsed
         finish(rec)
-        Recorder.finalize(folder: dir)
+        // la dernière tranche finit de s'écrire sur le disque juste après stop() : on lui laisse une seconde
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { Recorder.finalize(folder: dir) }
         return (dir, duration)
     }
 
@@ -178,14 +179,16 @@ final class Recorder: NSObject {
                 try? track?.insertTimeRange(range, of: src, at: cursor)
                 cursor = cursor + range.duration
             }
-            try? fm.removeItem(at: out)
-            let ok: Bool
-            if cursor.seconds > 0, let export = AVAssetExportSession(asset: comp, presetName: AVAssetExportPresetPassthrough) { // sans réencodage : quelques secondes même pour 2 h
+            // 1) sans réencodage (quelques secondes même pour 2 h) ; 2) sinon réencodé (plus long, mais accepté partout)
+            var ok = false
+            for preset in [AVAssetExportPresetPassthrough, AVAssetExportPresetAppleM4A] where !ok && cursor.seconds > 0 {
+                try? fm.removeItem(at: out)
+                guard let export = AVAssetExportSession(asset: comp, presetName: preset) else { continue }
                 export.outputURL = out
                 export.outputFileType = .m4a
                 await export.export()
                 ok = export.status == .completed
-            } else { ok = false }
+            }
             await MainActor.run {
                 if ok {
                     Uploader.shared.enqueue(file: out, course: course, url: url)

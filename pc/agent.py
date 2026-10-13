@@ -580,7 +580,8 @@ def fiche_cours(subject, folder: Path, linked=()):
     if not session:
         raise RuntimeError("rien à analyser pour ce cours (ni enregistrement, ni document)")
     items = []
-    for f in sorted(session, key=lambda f: not f.name.startswith("Transcription")):  # la transcription d'abord
+    # les transcriptions d'abord, dans l'ordre où elles ont été faites (= ordre des parties de l'enregistrement)
+    for f in sorted(session, key=lambda f: (not f.name.startswith("Transcription"), f.stat().st_mtime if f.name.startswith("Transcription") else 0)):
         t = scan(f, subject)  # déjà analysé à l'arrivée du document : lu dans le cache
         items.append((f.name, t if len(t) <= 40000 or f.name.startswith("Transcription") else digest(f, subject)))
     prompt = f"""{BASE_PROMPT}
@@ -781,7 +782,9 @@ def transcribe_audios(job, state):
     p = json.loads(job["params"] or "{}")
     subject = job["subject"]
     folder = session_dir(subject, job["event_uid"])
-    for aid in p.get("audios") or ([p["audio"]] if p.get("audio") else []):  # fiche faite de documents seuls : aucun audio
+    names = {f["id"]: f["name"] for f in state["files"]}
+    natural = lambda a: [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", names.get(a, ""))]  # « partie 2 » avant « partie 10 »
+    for aid in sorted(p.get("audios") or ([p["audio"]] if p.get("audio") else []), key=natural):  # fiche faite de documents seuls : aucun audio
         transcript = folder / f"Transcription {aid[:8]}.txt"
         if transcript.exists():
             continue

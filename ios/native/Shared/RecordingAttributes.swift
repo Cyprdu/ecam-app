@@ -27,8 +27,11 @@ enum LiveActivity {
         Task { await current?.update(.init(state: state, staleDate: nil)) }
     }
 
+    /// Termine TOUTES les activités « enregistrement » : y compris celle laissée par une app relancée par iOS
+    /// (sinon elle reste affichée et le bouton Arrêter ne commande plus rien)
     static func end() {
-        Task { await current?.end(nil, dismissalPolicy: .immediate); current = nil }
+        current = nil
+        Task { for a in Activity<RecordingAttributes>.activities { await a.end(nil, dismissalPolicy: .immediate) } }
     }
 }
 #endif

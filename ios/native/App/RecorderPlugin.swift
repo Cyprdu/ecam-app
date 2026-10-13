@@ -136,18 +136,22 @@ public class RecorderPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func pause(_ call: CAPPluginCall) {
-        Recorder.shared.pause()
-        call.resolve(status())
+        DispatchQueue.main.async { Recorder.shared.pause(); call.resolve(self.status()) }
     }
 
     @objc func resume(_ call: CAPPluginCall) {
-        Recorder.shared.resume()
-        call.resolve(status())
+        DispatchQueue.main.async { Recorder.shared.resume(); call.resolve(self.status()) }
     }
 
     @objc func stop(_ call: CAPPluginCall) {
-        guard let done = Recorder.shared.stopAndUpload() else { return call.reject("Aucun enregistrement en cours") }
-        call.resolve(["file": done.file.lastPathComponent, "duration": done.duration, "uploading": true])
+        DispatchQueue.main.async { // l'enregistreur et son minuteur vivent sur le fil principal
+            guard let done = Recorder.shared.stopAndUpload() else {
+                LiveActivity.end() // affichage resté d'un enregistrement interrompu
+                Recorder.recoverInterrupted()
+                return call.resolve(["uploading": true])
+            }
+            call.resolve(["file": done.file.lastPathComponent, "duration": done.duration, "uploading": true])
+        }
     }
 
     @objc func status(_ call: CAPPluginCall) {

@@ -7,7 +7,12 @@ struct StopRecordingIntent: LiveActivityIntent {
 
     func perform() async throws -> some IntentResult {
         #if !WIDGET_EXTENSION
-        await MainActor.run { _ = Recorder.shared.stopAndUpload() }
+        await MainActor.run {
+            if Recorder.shared.stopAndUpload() == nil { // rien en cours (app relancée) : on nettoie l'affichage et on récupère l'audio
+                LiveActivity.end()
+                Recorder.recoverInterrupted()
+            }
+        }
         #endif
         return .result()
     }

@@ -12,6 +12,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         window?.rootViewController = EcamViewController()
         window?.makeKeyAndVisible()
         UNUserNotificationCenter.current().delegate = self
+        LiveActivity.end()                 // au démarrage rien n'enregistre : on retire un affichage resté d'avant
         Recorder.recoverInterrupted()      // enregistrement interrompu (app tuée, plantage) → réassemblé et envoyé
         Uploader.shared.resumePending()    // envois annulés ou échoués → relancés
         return true
