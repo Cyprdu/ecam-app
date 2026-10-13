@@ -349,13 +349,23 @@ def folder_subjects(events):
     return out
 
 
+SKIPPED = set()  # dossiers ignorés déjà signalés dans le journal
+
+
 def push_local(state, dry=False):
     """Envoie dans l'app les fichiers ajoutés ou modifiés sur le PC."""
     events = state.get("events") or []
     subjects = folder_subjects(events)
     man = load_manifest()
+    known_subjects = {f["subject"] for f in state["files"]}
     for top in sorted(p for p in ECAM.iterdir() if p.is_dir() and p.name not in IGNORE and not p.name.startswith(".")):
         subject = subjects.get(top.name, top.name)
+        if top.name not in subjects and subject not in known_subjects:
+            # dossier perso (liens, archives…) : pas une matière du calendrier ni de l'app → ne devient pas une matière
+            if top.name not in SKIPPED:
+                SKIPPED.add(top.name)
+                log("dossier ignoré (ce n'est pas une matière du calendrier) :", top.name)
+            continue
         for p in sorted(top.rglob("*")):
             inner = p.relative_to(top)
             if not p.is_file() or IGNORE & set(inner.parts) or p.name.startswith(("~$", ".")) or p.suffix.lower() in (".part", ".tmp"):
