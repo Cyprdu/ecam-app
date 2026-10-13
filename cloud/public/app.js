@@ -572,7 +572,7 @@ function vNotes() {
   const general = generalAvg(notes);
   const delta = hist.length > 1 ? hist[hist.length - 1].v - hist[hist.length - 2].v : null;
   return `<div class="head"><div><h1>Notes</h1><div class="sub">${e.at ? 'Mis à jour ' + ago(e.at) : 'Première synchronisation…'}</div></div>
-      <button class="icon-btn" id="e-sync" aria-label="Actualiser">${icon('refresh')}</button></div>
+      <div style="display:flex;gap:8px"><button class="icon-btn" id="share-notes" aria-label="Partager mes notes">${icon('share')}</button><button class="icon-btn" id="e-sync" aria-label="Actualiser">${icon('refresh')}</button></div></div>
     ${e.error ? `<div class="banner">${esc(e.error)}</div>` : ''}
     ${general != null ? `<div class="card avg-card">
         <div class="avg-top"><div><span class="k">${icon('award')}Moyenne générale</span><div class="v">${fmt2(general)}<small> /20</small></div></div>
@@ -583,6 +583,23 @@ function vNotes() {
     ${subs.length ? subs.map(([s, ns, a]) => `<div class="section-title"><span>${esc(s)}</span>${a != null ? `<span class="grade ${gradeClass(a)}" style="min-width:0;padding:2px 8px;text-transform:none">${a.toFixed(2)}</span>` : ''}</div>
       <div class="list">${ns.map((n) => `<a class="row" href="#note/${noteId(n)}"><span class="grade ${gradeClass(n.grade)}">${esc(n.grade.replace('/20', ''))}</span><div class="grow"><div class="t">${esc(n.exam || n.label)}</div><div class="s wrap">${n.manual ? 'ajoutée à la main · ' : ''}${n.average ? 'moy. classe ' + esc(n.average.replace('/20', '')) + ' · ' : ''}${dFmt(n.date, { day: 'numeric', month: 'short' })}</div></div>${icon('chevron-right', 'chev')}</a>`).join('')}</div>`).join('')
       : `<div class="empty">${icon('award')}<div>Aucune note pour l’instant.</div></div>`}`;
+}
+
+// Lien public, en lecture seule, pour montrer ses notes (famille) : sans compte, révocable
+async function shareNotesSheet(renew) {
+  let url;
+  try { url = (await api('/share/notes', { method: 'POST', json: { renew: !!renew } })).url; } catch (e) { return toast(e.message); }
+  openSheet(`<h2>${icon('share')} Partager mes notes</h2>
+    <p class="note" style="margin-top:-8px">Toute personne qui a ce lien voit tes notes et tes moyennes, à jour automatiquement — et rien d’autre de l’app. Aucun compte nécessaire.</p>
+    <div class="card" style="padding:12px 14px;word-break:break-all;font-size:14px;margin-bottom:12px">${esc(url)}</div>
+    ${navigator.share ? '<button class="btn" id="sn-share">Envoyer…</button>' : ''}
+    <button class="btn ${navigator.share ? 'secondary' : ''}" id="sn-copy" style="margin-top:8px">Copier le lien</button>
+    <a class="btn secondary" href="${esc(url)}" target="_blank" rel="noopener" style="margin-top:8px;display:block;text-align:center">Voir la page</a>
+    <button class="btn danger" id="sn-renew" style="margin-top:8px">Créer un nouveau lien (l’ancien ne marchera plus)</button>`, (sh) => {
+    $('#sn-share', sh)?.addEventListener('click', () => navigator.share({ title: 'Mes notes ECAM', url }).catch(() => {}));
+    $('#sn-copy', sh).onclick = async () => { await navigator.clipboard.writeText(url); toast('Lien copié'); };
+    $('#sn-renew', sh).onclick = () => { if (confirm('Créer un nouveau lien ? Les personnes qui ont l’ancien ne pourront plus voir tes notes.')) shareNotesSheet(true); };
+  });
 }
 
 // Détail d'une note, en plein écran
@@ -1451,6 +1468,7 @@ function bind(route, arg) {
     catch (e) { toast(e.message); }
   });
   on('add-transcript', () => transcriptSheet(ev));
+  on('share-notes', () => shareNotesSheet());
   on('file-shared', () => checkShared(true));
   on('retry-pending', async () => { await syncPending(); toast(nativePending.length ? 'Envoi relancé' : 'Tout est envoyé'); });
   on('add-doc', () => pickDocs(ev ? { subject: ev.subject, uid: ev.uid } : { subject: arg }));
