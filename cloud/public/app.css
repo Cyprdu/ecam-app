@@ -493,3 +493,15 @@ body.offline::before {
 .track-bar i.cls { background: var(--muted); opacity: .55; }
 @keyframes grow { from { transform: scaleX(0); } }
 .chart .tip[hidden] { display: none; }
+
+/* Notes par module (UE) */
+.module { margin-top: 22px; }
+.mod-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-radius: 16px; background: var(--card); border: 1px solid var(--line); }
+.mod-name { font-weight: 700; font-size: 17px; letter-spacing: -.01em; }
+.mod-head .s { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.mod-avg { text-align: right; }
+.mod-avg b { display: block; font-size: 22px; font-weight: 750; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.mod-avg b.ok { color: var(--ok); } .mod-avg b.warn { color: var(--warn); }
+.mod-avg span { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; padding: 2px 7px; border-radius: 7px; }
+.mod-avg span.ok { background: var(--ok-soft); color: var(--ok); } .mod-avg span.warn { background: var(--warn-soft); color: var(--warn); }
+.module .section-title { margin-top: 12px; }

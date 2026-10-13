@@ -564,13 +564,20 @@ function bindCharts(root) {
 function vNotes() {
   if (!S.ecamUser) return vConnect('Notes', 'Tes notes ECAM');
   const e = S.ecam || {};
-  const notes = e.notes || [];
-  const bySubject = {};
-  for (const n of notes) (bySubject[n.subject] ||= []).push(n);
-  const subs = Object.entries(bySubject).map(([s, ns]) => [s, ns, noteAvg(ns)]).sort((a, b) => b[1][0].date.localeCompare(a[1][0].date));
-  const hist = avgHistory(notes);
-  const general = generalAvg(notes);
+  const r = e.report; // bulletin par module (UE), calculé par le serveur comme pour la page « famille »
+  const general = r ? r.general : generalAvg(e.notes || []);
+  const hist = r ? r.history.map(([date, v]) => ({ date, v })) : avgHistory(e.notes || []);
   const delta = hist.length > 1 ? hist[hist.length - 1].v - hist[hist.length - 2].v : null;
+  const noteRow = (n) => `<a class="row" href="#note/${noteId(n)}"><span class="grade ${gradeClass(n.grade)}">${esc(n.grade.replace('/20', ''))}</span><div class="grow"><div class="t">${esc(n.exam || n.label)}</div><div class="s wrap">${n.average ? 'moy. classe ' + esc(n.average.replace('/20', '')) + ' · ' : ''}${dFmt(n.date, { day: 'numeric', month: 'short' })}</div></div>${icon('chevron-right', 'chev')}</a>`;
+  const pill = (a) => `<span class="grade ${gradeClass(a)}" style="min-width:0;padding:2px 8px;text-transform:none">${fmt2(a)}</span>`;
+  const mods = r ? r.modules.filter((u) => u.ecs.some((x) => x.notes.length)) : [];
+  const body = r
+    ? mods.map((u) => `<div class="module">
+        <div class="mod-head"><div><div class="mod-name">${esc(u.ue)}</div><div class="s">${u.ects} ECTS · ${u.ecs.filter((x) => x.notes.length).length}/${u.ecs.length} matière${u.ecs.length > 1 ? 's' : ''} notée${u.ecs.length > 1 ? 's' : ''}</div></div>
+          ${u.avg != null ? `<div class="mod-avg"><b class="${gradeClass(u.avg)}">${fmt2(u.avg)}</b><span class="${u.avg >= 10 ? 'ok' : 'warn'}">${u.ecs.every((x) => x.avg != null) ? (u.avg >= 10 ? 'Validé' : 'Non validé') : u.avg >= 10 ? 'En bonne voie' : 'Sous 10'}</span></div>` : ''}</div>
+        ${u.ecs.filter((x) => x.notes.length).map((x) => `<div class="section-title"><span>${esc(x.ec)}</span>${x.avg != null ? pill(x.avg) : ''}</div><div class="list">${x.notes.map(noteRow).join('')}</div>`).join('')}
+      </div>`).join('') + (r.other.length ? `<div class="section-title">Autres</div><div class="list">${r.other.map(noteRow).join('')}</div>` : '')
+    : Object.entries((e.notes || []).reduce((m, n) => ((m[n.subject] ||= []).push(n), m), {})).map(([s, ns]) => `<div class="section-title"><span>${esc(s)}</span>${noteAvg(ns) != null ? pill(noteAvg(ns)) : ''}</div><div class="list">${ns.map(noteRow).join('')}</div>`).join('');
   return `<div class="head"><div><h1>Notes</h1><div class="sub">${e.at ? 'Mis à jour ' + ago(e.at) : 'Première synchronisation…'}</div></div>
       <div style="display:flex;gap:8px"><button class="icon-btn" id="share-notes" aria-label="Partager mes notes">${icon('share')}</button><button class="icon-btn" id="e-sync" aria-label="Actualiser">${icon('refresh')}</button></div></div>
     ${e.error ? `<div class="banner">${esc(e.error)}</div>` : ''}
@@ -578,11 +585,9 @@ function vNotes() {
         <div class="avg-top"><div><span class="k">${icon('award')}Moyenne générale</span><div class="v">${fmt2(general)}<small> /20</small></div></div>
         ${delta != null ? `<span class="delta ${delta >= 0 ? 'up' : 'down'}">${signed(delta)}<small>depuis la dernière note</small></span>` : ''}</div>
         ${lineChart(hist, 'Évolution de la moyenne générale')}
-        <div class="s">Indicative : moyenne des matières, sans les coefficients ECTS. Touche la courbe pour voir chaque date.</div>
+        <div class="s">${r ? `Modules pondérés par leurs crédits (${r.ects} ECTS évalués sur 30) ; un module se valide avec 10.` : 'Moyenne des matières.'} Touche la courbe pour voir chaque date.</div>
       </div>` : ''}
-    ${subs.length ? subs.map(([s, ns, a]) => `<div class="section-title"><span>${esc(s)}</span>${a != null ? `<span class="grade ${gradeClass(a)}" style="min-width:0;padding:2px 8px;text-transform:none">${a.toFixed(2)}</span>` : ''}</div>
-      <div class="list">${ns.map((n) => `<a class="row" href="#note/${noteId(n)}"><span class="grade ${gradeClass(n.grade)}">${esc(n.grade.replace('/20', ''))}</span><div class="grow"><div class="t">${esc(n.exam || n.label)}</div><div class="s wrap">${n.manual ? 'ajoutée à la main · ' : ''}${n.average ? 'moy. classe ' + esc(n.average.replace('/20', '')) + ' · ' : ''}${dFmt(n.date, { day: 'numeric', month: 'short' })}</div></div>${icon('chevron-right', 'chev')}</a>`).join('')}</div>`).join('')
-      : `<div class="empty">${icon('award')}<div>Aucune note pour l’instant.</div></div>`}`;
+    ${body || `<div class="empty">${icon('award')}<div>Aucune note pour l’instant.</div></div>`}`;
 }
 
 // Lien public, en lecture seule, pour montrer ses notes (famille) : sans compte, révocable
@@ -612,7 +617,9 @@ function vNote(id) {
   const same = notes.filter((x) => x.subject === n.subject);
   const others = notes.filter((x) => x !== n);
   const subjWith = noteAvg(same), subjWithout = noteAvg(same.filter((x) => x !== n));
-  const genWith = generalAvg(notes), genWithout = generalAvg(others);
+  const ef = S.ecam?.report?.effects?.[`${n.label}|${n.date}`];
+  const ue = S.ecam?.report?.modules.find((u) => u.ecs.some((x) => x.notes.some((y) => y.label === n.label && y.date === n.date)));
+  const [genWithout, genWith] = ef ? ef.general : [generalAvg(others), generalAvg(notes)];
   const bar = (v, label, c) => `<div class="cmp"><span>${label}</span><div class="track-bar"><i class="${c}" style="width:${Math.max(2, (v / max) * 100)}%"></i></div><b>${fmt2(v)}</b></div>`;
   const effect = (a, b, label) => (a != null && b != null ? `<div class="row"><div class="grow"><div class="t">${label}</div><div class="s">${fmt2(b)} → ${fmt2(a)}</div></div><span class="delta ${a - b >= 0 ? 'up' : 'down'}">${signed(a - b)}</span></div>` : '');
   const subjHist = avgHistory(same, noteAvg);
@@ -620,8 +627,7 @@ function vNote(id) {
     <div class="note-hero">
       <div class="note-big ${gradeClass(n.grade)}">${isNaN(g) ? esc(n.grade) : fmt2(g)}<small>/${max}</small></div>
       <h1>${esc(n.exam || n.label)}</h1>
-      <div class="sub">${esc(n.subject)}</div>
-      ${n.manual ? `<div class="chips" style="justify-content:center;margin-top:10px"><span class="chip accent">${icon('pencil')}${n.official ? `Ajoutée à la main · l’intranet affiche « ${esc(n.official)} »` : 'Ajoutée à la main · pas encore sur l’intranet'}</span></div>` : ''}
+      <div class="sub">${esc(n.subject)}${ue ? ` · module ${esc(ue.ue)}` : ''}</div>
     </div>
     ${!isNaN(g) && !isNaN(cls) ? `<div class="card note-cmp">
       ${bar(g, 'Toi', 'me')}${bar(cls, 'Classe', 'cls')}
@@ -635,7 +641,7 @@ function vNote(id) {
       ${n.teacher ? `<div class="row"><span class="lead">${icon('user')}</span><div class="grow"><div class="t">Professeur</div><div class="s">${esc(n.teacher)}</div></div></div>` : ''}
       <div class="row"><span class="lead">${icon('text')}</span><div class="grow"><div class="t">Intitulé complet</div><div class="s wrap">${esc(n.label)}</div></div></div>
     </div>
-    ${!isNaN(g) ? `<div class="section-title">Effet de cette note</div><div class="list">${effect(subjWith, subjWithout, 'Moyenne de la matière')}${effect(genWith, genWithout, 'Moyenne générale')}${subjWithout == null ? '<div class="row"><div class="grow"><div class="s">Première note de la matière.</div></div></div>' : ''}</div>` : ''}
+    ${!isNaN(g) ? `<div class="section-title">Effet de cette note</div><div class="list">${effect(subjWith, subjWithout, 'Moyenne de la matière')}${ef && ue ? effect(ef.ue[1], ef.ue[0], `Module ${ue.ue} (${ue.ects} ECTS)`) : ''}${effect(genWith, genWithout, 'Moyenne générale')}${subjWithout == null ? '<div class="row"><div class="grow"><div class="s">Première note de la matière.</div></div></div>' : ''}</div>` : ''}
     ${subjHist.length > 1 ? `<div class="section-title">Évolution en ${esc(n.subject)}</div><div class="card avg-card">${lineChart(subjHist, 'Évolution de la moyenne de la matière')}</div>` : ''}
     ${same.length > 1 ? `<div class="section-title">Autres notes de la matière</div><div class="list">${same.filter((x) => x !== n).map((x) => `<a class="row" href="#note/${noteId(x)}"><span class="grade ${gradeClass(x.grade)}">${esc(x.grade.replace('/20', ''))}</span><div class="grow"><div class="t">${esc(x.exam || x.label)}</div><div class="s">${dFmt(x.date, { day: 'numeric', month: 'short' })}</div></div>${icon('chevron-right', 'chev')}</a>`).join('')}</div>` : ''}`;
 }

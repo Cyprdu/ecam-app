@@ -3,19 +3,10 @@
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const num = (g) => parseFloat(String(g).replace(',', '.'));
 const fmt = (x) => x.toFixed(2).replace('.', ',');
-const avg = (ns) => {
-  const ok = ns.filter((n) => !isNaN(num(n.grade)));
-  const w = ok.reduce((s, n) => s + (parseFloat(n.weight) || 100), 0);
-  return ok.length ? ok.reduce((s, n) => s + num(n.grade) * (parseFloat(n.weight) || 100), 0) / w : null;
-};
-const bySubject = (notes) => notes.reduce((m, n) => ((m[n.subject] ||= []).push(n), m), {});
-const general = (notes) => { const a = Object.values(bySubject(notes)).map(avg).filter((x) => x != null); return a.length ? a.reduce((s, x) => s + x, 0) / a.length : null; };
 const day = (d, o = { day: 'numeric', month: 'long' }) => new Date(d + 'T12:00').toLocaleDateString('fr-FR', o);
 const tone = (g) => (isNaN(num(g)) ? '' : num(g) >= 12 ? 'ok' : num(g) < 10 ? 'low' : 'mid');
 
-function chart(notes) {
-  const dates = [...new Set(notes.filter((n) => !isNaN(num(n.grade))).map((n) => n.date))].sort();
-  const pts = dates.map((d) => [d, general(notes.filter((n) => n.date <= d))]).filter((p) => p[1] != null);
+function chart(pts) {
   if (pts.length < 2) return '';
   const W = 360, H = 150, L = 28, R = 10, T = 10, B = 22; // ≈ largeur d’un téléphone : texte lisible
   const vs = pts.map((p) => p[1]);
@@ -34,11 +25,15 @@ function chart(notes) {
   </svg>`;
 }
 
-export function parentsPage(notes, at) {
-  const subs = Object.entries(bySubject(notes)).map(([s, ns]) => [s, ns, avg(ns)]).sort((a, b) => b[1][0].date.localeCompare(a[1][0].date));
-  const g = general(notes);
+export function parentsPage(rep, at) {
+  const g = rep.general;
   const row = (n) => `<li><span class="grade ${tone(n.grade)}">${esc(String(n.grade).replace('/20', '').replace('.', ','))}</span>
-      <div><b>${esc(n.exam || n.label)}</b><small>${day(n.date)}${n.average ? ` · moyenne de la classe ${esc(String(n.average).replace('/20', '').replace('.', ','))}` : ''}${n.manual ? ' · <em>pas encore publiée sur l’intranet</em>' : ''}</small></div></li>`;
+      <div><b>${esc(n.exam || n.label)}</b><small>${day(n.date)}${n.average ? ` · moyenne de la classe ${esc(String(n.average).replace('/20', '').replace('.', ','))}` : ''}</small></div></li>`;
+  // toutes les matières notées : validé ou non ; sinon tendance
+  const status = (u) => { const done = u.ecs.every((e) => e.avg != null); return u.avg >= 10 ? `<span class="ok-tag">${done ? 'validé' : 'en bonne voie'}</span>` : `<span class="low-tag">${done ? 'non validé' : 'sous 10'}</span>`; };
+  const mods = rep.modules.filter((u) => u.ecs.some((e) => e.notes.length));
+  const moduleHtml = (u) => `<section class="mod"><h2><span>${esc(u.ue)} <small>${u.ects} ECTS</small></span>${u.avg != null ? `<span>${fmt(u.avg)} ${status(u)}</span>` : ''}</h2>
+    ${u.ecs.filter((e) => e.notes.length).map((e) => `<h3><span>${esc(e.ec)}</span>${e.avg != null ? `<span>${fmt(e.avg)}</span>` : ''}</h3><ul>${e.notes.map(row).join('')}</ul>`).join('')}</section>`;
   return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow"><title>Notes ECAM</title>
 <style>
@@ -57,10 +52,15 @@ li b{display:block;font-weight:600}li small{color:var(--muted);font-size:13px}em
 .grade{min-width:58px;text-align:center;font-weight:700;font-variant-numeric:tabular-nums;padding:7px 8px;border-radius:11px;background:var(--line)}
 .grade.ok{background:var(--ok-soft);color:var(--ok)}.grade.mid{background:var(--mid-soft);color:var(--mid)}.grade.low{background:var(--low-soft);color:var(--low)}
 .note{color:var(--muted);font-size:12.5px;margin-top:22px;text-align:center}
+.mod{margin-top:26px}.mod h2{margin-top:0;align-items:flex-start}.mod h2 span:last-child{white-space:nowrap}h2 small{display:block;font-size:11px;letter-spacing:.04em;opacity:.8;margin-top:2px}
+h3{display:flex;justify-content:space-between;gap:12px;font-size:14.5px;font-weight:600;margin:14px 4px 6px}h3 span:last-child{font-variant-numeric:tabular-nums;color:var(--muted)}
+.ok-tag,.low-tag{font-size:11px;font-weight:700;padding:2px 7px;border-radius:7px;margin-left:6px;text-transform:uppercase;letter-spacing:.04em}
+.ok-tag{background:var(--ok-soft);color:var(--ok)}.low-tag{background:var(--low-soft);color:var(--low)}
 </style></head><body><main>
 <h1>Notes</h1><div class="sub">Bachelor CSIU — ECAM LaSalle Lyon${at ? ` · mis à jour le ${new Date(at).toLocaleString('fr-FR', { timeZone: 'Europe/Paris', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` : ''}</div>
-${g != null ? `<div class="card"><div class="k">Moyenne générale</div><div class="v">${fmt(g)}<small> /20</small></div>${chart(notes)}</div>` : ''}
-${subs.map(([s, ns, a]) => `<h2><span>${esc(s)}</span>${a != null ? `<span>${fmt(a)}</span>` : ''}</h2><ul>${ns.map(row).join('')}</ul>`).join('') || '<p class="sub">Aucune note pour l’instant.</p>'}
-<p class="note">Page en lecture seule, mise à jour automatiquement depuis l’intranet de l’école.<br>Moyenne générale indicative (sans les coefficients des matières).</p>
+${g != null ? `<div class="card"><div class="k">Moyenne générale · ${rep.ects} ECTS évalués sur 30</div><div class="v">${fmt(g)}<small> /20</small></div>${chart(rep.history)}</div>` : ''}
+${mods.map(moduleHtml).join('') || '<p class="sub">Aucune note pour l’instant.</p>'}
+${rep.other.length ? `<section class="mod"><h2><span>Autres</span></h2><ul>${rep.other.map(row).join('')}</ul></section>` : ''}
+<p class="note">Page en lecture seule, mise à jour automatiquement depuis l’intranet de l’école.<br>Chaque module (UE) se valide avec 10 de moyenne ; la moyenne générale pondère les modules par leurs crédits ECTS.</p>
 </main></body></html>`;
 }
