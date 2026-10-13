@@ -1,5 +1,5 @@
 // Parseurs de l'intranet, sur du HTML fictif reproduisant la structure réelle des pages.
-import { parseNotes, parsePapercut, parseBar } from '../src/ecam.js';
+import { parseNotes, parsePapercut, parseBar, mergeManual } from '../src/ecam.js';
 const eq = (x, y) => { if (x !== y) throw new Error(`${x} !== ${y}`); };
 
 const notes = parseNotes(`<table><tbody><tr><td>Note</td><td>Libellé</td><td>Barême</td><td>Moyenne</td><td>Professeur(s)</td><td>Date</td></tr>
@@ -17,4 +17,11 @@ const bar = parseBar(`<main><div><p class="txt s7 bold">Accès au bar :</p> <p c
 <div><p class="txt s7 bold">Boisson préférée :</p> <p class="txt">Ice tea</p></div>
 <table><tbody><tr> <td class="dt-type-date">2026-09-10 17:54:29</td> <td>Coca</td> <td class="dt-type-numeric">1.00 €</td> </tr></tbody></table></main>`);
 eq(bar.balance, '12.50'); eq(bar.favorite, 'Ice tea'); eq(bar.history.length, 1); eq(bar.history[0].item, 'Coca');
+// Notes ajoutées à la main : pas de doublon quand la vraie arrive, correction d'un « AJ » tant qu'il n'y a pas de chiffre
+const perso = [{ subject: 'Structure', exam: 'Test', date: '2026-09-23', grade: '14.80/20' }, { replaces: 'L - Gestion - Eval1', grade: '14.00/20' }];
+const aj = { grade: 'AJ/20', subject: 'Gestion', exam: 'Eval1', label: 'L - Gestion - Eval1', date: '2026-09-30' };
+let m = mergeManual([aj], perso);
+eq(m.length, 2); eq(m.find((n) => n.subject === 'Gestion').grade, '14.00/20'); eq(m.find((n) => n.subject === 'Structure').manual, true);
+m = mergeManual([{ ...aj, grade: '13.50/20' }, { grade: '15.00/20', subject: 'Structure', exam: 'Test', label: 'L - Structure - Test', date: '2026-09-25' }], perso);
+eq(m.length, 2); eq(m.find((n) => n.subject === 'Gestion').grade, '13.50/20'); eq(m.find((n) => n.subject === 'Structure').grade, '15.00/20');
 console.log('ecam OK');

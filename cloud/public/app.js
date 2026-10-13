@@ -581,7 +581,7 @@ function vNotes() {
         <div class="s">Indicative : moyenne des matières, sans les coefficients ECTS. Touche la courbe pour voir chaque date.</div>
       </div>` : ''}
     ${subs.length ? subs.map(([s, ns, a]) => `<div class="section-title"><span>${esc(s)}</span>${a != null ? `<span class="grade ${gradeClass(a)}" style="min-width:0;padding:2px 8px;text-transform:none">${a.toFixed(2)}</span>` : ''}</div>
-      <div class="list">${ns.map((n) => `<a class="row" href="#note/${noteId(n)}"><span class="grade ${gradeClass(n.grade)}">${esc(n.grade.replace('/20', ''))}</span><div class="grow"><div class="t">${esc(n.exam || n.label)}</div><div class="s wrap">${n.average ? 'moy. classe ' + esc(n.average.replace('/20', '')) + ' · ' : ''}${dFmt(n.date, { day: 'numeric', month: 'short' })}</div></div>${icon('chevron-right', 'chev')}</a>`).join('')}</div>`).join('')
+      <div class="list">${ns.map((n) => `<a class="row" href="#note/${noteId(n)}"><span class="grade ${gradeClass(n.grade)}">${esc(n.grade.replace('/20', ''))}</span><div class="grow"><div class="t">${esc(n.exam || n.label)}</div><div class="s wrap">${n.manual ? 'ajoutée à la main · ' : ''}${n.average ? 'moy. classe ' + esc(n.average.replace('/20', '')) + ' · ' : ''}${dFmt(n.date, { day: 'numeric', month: 'short' })}</div></div>${icon('chevron-right', 'chev')}</a>`).join('')}</div>`).join('')
       : `<div class="empty">${icon('award')}<div>Aucune note pour l’instant.</div></div>`}`;
 }
 
@@ -604,6 +604,7 @@ function vNote(id) {
       <div class="note-big ${gradeClass(n.grade)}">${isNaN(g) ? esc(n.grade) : fmt2(g)}<small>/${max}</small></div>
       <h1>${esc(n.exam || n.label)}</h1>
       <div class="sub">${esc(n.subject)}</div>
+      ${n.manual ? `<div class="chips" style="justify-content:center;margin-top:10px"><span class="chip accent">${icon('pencil')}${n.official ? `Ajoutée à la main · l’intranet affiche « ${esc(n.official)} »` : 'Ajoutée à la main · pas encore sur l’intranet'}</span></div>` : ''}
     </div>
     ${!isNaN(g) && !isNaN(cls) ? `<div class="card note-cmp">
       ${bar(g, 'Toi', 'me')}${bar(cls, 'Classe', 'cls')}

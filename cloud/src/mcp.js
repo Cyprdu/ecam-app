@@ -1,5 +1,7 @@
 // Connecteur MCP pour Claude (claude.ai / app Claude) : Claude lit les cours et enregistre ses fiches dans l'app.
 // Protocole : JSON-RPC 2.0 en HTTP simple (« Streamable HTTP » sans flux).
+import { mergeManual } from './ecam.js';
+
 const VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const MAX = 40000; // caractères renvoyés par lecture
 const DOSSIER = 120000; // caractères max renvoyés par dossier_revision
@@ -154,7 +156,8 @@ export function tools(ctx) {
       inputSchema: { type: 'object', properties: {} },
       async run() {
         const e = JSON.parse((await DB.prepare("SELECT value FROM kv WHERE key='ecam'").first())?.value || '{}');
-        return (e.notes || []).map((n) => `${n.date} · ${n.subject} · ${n.exam} · ${n.grade} (coef ${n.weight}, moyenne classe ${n.average})`).join('\n') || 'Aucune note (compte ECAM non connecté ?).';
+        const perso = JSON.parse((await DB.prepare("SELECT value FROM kv WHERE key='notes_perso'").first())?.value || '[]');
+        return mergeManual(e.notes, perso).map((n) => `${n.date} · ${n.subject} · ${n.exam} · ${n.grade}${n.manual ? ' (saisie par l’étudiant, pas encore sur l’intranet)' : ` (coef ${n.weight}, moyenne classe ${n.average})`}`).join('\n') || 'Aucune note (compte ECAM non connecté ?).';
       },
     },
     {

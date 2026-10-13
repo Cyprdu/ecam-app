@@ -118,3 +118,20 @@ export async function syncEcam(env, notify) {
   }
   return merged;
 }
+
+// ---------- Notes ajoutées à la main (kv « notes_perso ») ----------
+// { subject, exam, date, grade } : ajoutée tant que l'intranet n'a pas de note de la même matière à ±5 jours (pas de doublon)
+// { replaces: label, grade }     : remplace une note non chiffrée (AJ, ABS…) tant que l'intranet ne donne pas de chiffre
+const numeric = (g) => !isNaN(parseFloat(String(g).replace(',', '.')));
+const days = (a, b) => Math.abs(Date.parse(a) - Date.parse(b)) / 864e5;
+export function mergeManual(notes, manual) {
+  const out = (notes || []).map((n) => {
+    const fix = manual.find((m) => m.replaces === n.label);
+    return fix && !numeric(n.grade) ? { ...n, grade: fix.grade, official: n.grade, manual: true } : n;
+  });
+  for (const m of manual.filter((m) => !m.replaces)) {
+    if (out.some((n) => n.subject === m.subject && !n.manual && days(n.date, m.date) <= 5)) continue; // la vraie note est arrivée
+    out.push({ grade: m.grade, subject: m.subject, exam: m.exam, label: `${m.subject} - ${m.exam}`, weight: m.weight || '', average: '', teacher: '', date: m.date, manual: true });
+  }
+  return out.sort((a, b) => b.date.localeCompare(a.date));
+}
