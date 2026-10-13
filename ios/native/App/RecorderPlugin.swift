@@ -2,6 +2,7 @@ import AVFoundation
 import Capacitor
 import Foundation
 import UIKit
+import QuickLook
 import UserNotifications
 
 // Pont entre l'app web et l'enregistreur natif.
@@ -27,6 +28,7 @@ public class RecorderPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "incoming", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "sendShared", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "dropShared", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "preview", returnType: CAPPluginReturnPromise),
     ]
 
     // ---------- Documents reçus par « Partager › ECAM » ----------
@@ -161,4 +163,30 @@ public class RecorderPlugin: CAPPlugin, CAPBridgedPlugin {
     private func status() -> [String: Any] {
         ["active": Recorder.shared.isActive, "recording": Recorder.shared.isRecording, "seconds": Recorder.shared.elapsed, "course": Recorder.shared.course]
     }
+}
+
+// ---------- Aperçu natif d'Apple (QuickLook) : PowerPoint, Word, Excel, PDF, images… comme sur Mac ----------
+extension RecorderPlugin: QLPreviewControllerDataSource {
+    private static var previewFile: URL?
+
+    @objc func preview(_ call: CAPPluginCall) {
+        guard let raw = call.getString("url"), let url = URL(string: raw) else { return call.reject("lien manquant") }
+        let name = (call.getString("name") ?? "document").replacingOccurrences(of: "/", with: "-")
+        URLSession.shared.downloadTask(with: url) { tmp, resp, err in
+            guard let tmp, err == nil, ((resp as? HTTPURLResponse)?.statusCode ?? 500) < 300 else { return call.reject("Téléchargement impossible") }
+            let dest = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+            try? FileManager.default.removeItem(at: dest)
+            guard (try? FileManager.default.moveItem(at: tmp, to: dest)) != nil else { return call.reject("Fichier illisible") }
+            DispatchQueue.main.async {
+                RecorderPlugin.previewFile = dest
+                let ql = QLPreviewController()
+                ql.dataSource = self
+                self.bridge?.viewController?.present(ql, animated: true)
+                call.resolve()
+            }
+        }.resume()
+    }
+
+    public func numberOfPreviewItems(in controller: QLPreviewController) -> Int { RecorderPlugin.previewFile == nil ? 0 : 1 }
+    public func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem { (RecorderPlugin.previewFile ?? URL(fileURLWithPath: "/")) as NSURL }
 }

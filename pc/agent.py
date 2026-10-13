@@ -801,7 +801,11 @@ def transcribe_audios(job, state):
         audio_path = local_path(aid) or folder / f"Enregistrement {aid[:8]}{audio_ext(audio)}"
         if not audio_path.exists():
             log("téléchargement de l'audio…")
-            download(aid, audio_path)
+            try:
+                download(aid, audio_path)
+            except Exception as e:  # coupure réseau : on réessaiera au prochain passage, sans bloquer les autres parties
+                log("téléchargement interrompu :", e)
+                continue
             remember(audio_path, aid)
         log("transcription…", audio_path.name)
         t0 = time.time()

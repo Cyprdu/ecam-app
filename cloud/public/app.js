@@ -263,7 +263,18 @@ function vAgenda() {
     <div class="pager" id="pager"><div class="track" id="track">${panes()}</div></div>`;
 }
 
+let coursRecs = {};
 function fileRows(fs) {
+  const seenTr = new Set();
+  fs = fs.filter((f) => {
+    if (f.kind === 'audio') return partNo(f.name) <= 1 && f.size > 4000;
+    if (f.kind === 'transcript' && f.parent && f.event_uid) { if (seenTr.has(f.event_uid)) return false; seenTr.add(f.event_uid); }
+    return true;
+  }).map((f) => {
+    if (f.kind !== 'audio' || !partNo(f.name)) return f;
+    const all = S.files.filter((x) => x.kind === 'audio' && x.event_uid === f.event_uid && recBase(x.name) === recBase(f.name));
+    return { ...f, name: recBase(f.name), size: all.reduce((n, x) => n + x.size, 0) };
+  });
   return fs.map((f) => `<button class="row" data-file="${f.id}"><span class="lead">${icon(fileIcon(f))}</span><div class="grow"><div class="t">${esc(f.name)}</div><div class="s">${dFmt(f.created, { day: 'numeric', month: 'short' })} · ${size(f.size)}</div></div>${icon('chevron-right', 'chev')}</button>`).join('');
 }
 
@@ -292,6 +303,9 @@ function vCours(uid) {
   const fiches = fs.filter((f) => f.kind === 'fiche');
   const audio = fs.filter((f) => f.kind === 'audio' || f.kind === 'transcript');
   const docs = fs.filter((f) => f.kind === 'doc');
+  const recs = recordingsOf(fs);
+  const hasTranscript = fs.some((f) => f.kind === 'transcript');
+  coursRecs = Object.fromEntries(recs.map((r, i) => [`${uid}#${i}`, { ...r, label: recs.length > 1 ? `Enregistrement ${i + 1}` : 'Écouter le cours', sub: `${e.subject} · ${dayLabel(e.start)}` }]));
   return `<a class="back" href="javascript:history.back()">${icon('chevron-left')}Retour</a>
     <div class="head"><div><h1 style="font-size:26px">${esc(e.subject)}</h1>
       <div class="sub">${dayLabel(e.start)} · ${e.start.slice(11, 16)}–${(e.end || '').slice(11, 16)}${e.type ? ' · ' + esc(e.type) : ''}</div>
@@ -301,7 +315,10 @@ function vCours(uid) {
       <button class="card action" id="add-doc">${icon('file-plus')}Document</button>
       <button class="card action" id="add-task">${icon('list-plus')}Devoir</button>
     </div>
-    ${(audio.length || docs.length) && !jobs.some((j) => JSON.parse(j.params || '{}').ready || j.status === 'running') ? `<div class="list" style="margin-top:10px"><button class="row" id="fiche-now"><span class="lead">${icon('sparkles')}</span><div class="grow"><div class="t">${fiches.length ? 'Refaire la fiche maintenant' : 'Faire la fiche maintenant'}</div><div class="s">Avec ${[audio.filter((f) => f.kind === 'audio').length && audio.filter((f) => f.kind === 'audio').length + ' enregistrement(s)', docs.length && docs.length + ' document(s)'].filter(Boolean).join(' et ') || 'ce qui est envoyé'}, sans attendre</div></div></button></div>` : ''}
+    ${recs.length || hasTranscript ? `<div class="section-title">Le cours</div>
+      ${Object.entries(coursRecs).map(([k, r]) => playerHtml(k, r, r.label)).join('')}
+      ${hasTranscript ? `<div class="list" style="margin-top:10px"><a class="row" href="#transcription/${encodeURIComponent(uid)}"><span class="lead">${icon('text')}</span><div class="grow"><div class="t">Lire la transcription</div><div class="s">Le cours en entier, en texte</div></div>${icon('chevron-right', 'chev')}</a></div>` : ''}` : ''}
+    ${(audio.length || docs.length) && !jobs.some((j) => JSON.parse(j.params || '{}').ready || j.status === 'running') ? `<div class="list" style="margin-top:10px"><button class="row" id="fiche-now"><span class="lead">${icon('sparkles')}</span><div class="grow"><div class="t">${fiches.length ? 'Refaire la fiche maintenant' : 'Faire la fiche maintenant'}</div><div class="s">Avec ${[recs.length && (recs.length > 1 ? recs.length + ' enregistrements' : 'l’enregistrement'), docs.length && docs.length + ' document(s)'].filter(Boolean).join(' et ') || 'ce qui est envoyé'}, sans attendre</div></div></button></div>` : ''}
     <div class="list" style="margin-top:10px"><button class="row" data-ask="cours"><span class="lead">${icon('sparkles')}</span><div class="grow"><div class="t">Demander à Claude</div><div class="s">Explique-moi ce cours, fais-en une fiche…</div></div>${icon('chevron-right', 'chev')}</button>
       <button class="row" id="add-transcript"><span class="lead">${icon('text')}</span><div class="grow"><div class="t">Ajouter la transcription en texte</div><div class="s">Texte du cours tapé ou collé, à la place ou en plus de l’audio</div></div>${icon('chevron-right', 'chev')}</button></div>
     ${fiches.length || jobs.length ? `<div class="section-title">Fiche de révision</div><div class="list">${fiches.map((f) => `<a class="row" href="#fiche/${f.id}"><span class="lead">${icon('sparkles')}</span><div class="grow"><div class="t">${esc(f.name)}</div><div class="s">Prête · ${dFmt(f.created, { day: 'numeric', month: 'short' })}</div></div>${icon('chevron-right', 'chev')}</a>`).join('')}${jobRows(jobs)}</div>` : ''}
@@ -309,7 +326,7 @@ function vCours(uid) {
     <div class="section-title">Documents</div>
     ${docs.length ? `<div class="list">${fileRows(docs.map((f) => ({ ...f, name: f.name.slice(f.name.lastIndexOf('/') + 1) })))}</div>` : `<p class="note">Aucun document pour ce cours. Ajoute les supports du prof : ils serviront pour les fiches.</p>`}
     <div class="list" style="margin-top:10px"><a class="row" href="#matiere/${encodeURIComponent(e.subject)}"><span class="lead">${icon('book')}</span><div class="grow"><div class="t">Tous les documents de la matière</div><div class="s">${docCount(e.subject)} documents et fiches</div></div>${icon('chevron-right', 'chev')}</a></div>
-    ${audio.length ? `<div class="section-title">Enregistrements</div><div class="list">${fileRows(audio)}</div>` : ''}`;
+    `;
 }
 
 // ---------- Matières : une icône et une couleur par matière ----------
@@ -852,6 +869,222 @@ async function vFiche(id) {
   };
 }
 
+// ---------- Enregistrements : un cours = un seul enregistrement, même s'il a été envoyé en plusieurs parties ----------
+const partNo = (name) => +((/partie (\d+)\s*$/i.exec(name) || [])[1] || 0);
+const recBase = (name) => name.replace(/\s*partie \d+\s*$/i, '').trim();
+// [{ title, parts: [fichiers audio dans l'ordre], transcripts: [transcriptions dans le même ordre] }]
+function recordingsOf(fs) {
+  const groups = {};
+  for (const f of fs.filter((x) => x.kind === 'audio' && x.size > 4000)) (groups[recBase(f.name)] ||= []).push(f);
+  return Object.entries(groups).map(([title, parts]) => {
+    parts.sort((a, b) => partNo(a.name) - partNo(b.name) || a.created.localeCompare(b.created));
+    const transcripts = parts.map((p) => fs.find((t) => t.kind === 'transcript' && t.parent === p.id)).filter(Boolean);
+    return { title, parts, transcripts, size: parts.reduce((s, p) => s + p.size, 0) };
+  }).sort((a, b) => a.parts[0].created.localeCompare(b.parts[0].created));
+}
+const fileLink = async (id) => (await api('/files/' + id + '/link')).url;
+const hms = (s) => { s = Math.max(0, Math.floor(s || 0)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s % 60).padStart(2, '0'); };
+
+// Lecteur unique de l'app : enchaîne les parties sans coupure visible, continue quand on change de page,
+// commandes sur l'écran verrouillé (Media Session), vitesse de lecture, ±15 s, reprise là où on s'était arrêté
+const PL = { audio: new Audio(), key: null, title: '', sub: '', parts: [], urls: [], dur: [], idx: 0, rate: +(store.get('rate') || 1) };
+PL.audio.preload = 'auto';
+const plTotal = () => PL.dur.reduce((s, d) => s + d, 0);
+const plStart = (i) => PL.dur.slice(0, i).reduce((s, d) => s + d, 0);
+const plPos = () => plStart(PL.idx) + (PL.audio.currentTime || 0);
+async function plLoad(key, title, sub, parts) {
+  if (PL.key === key) return;
+  PL.audio.pause();
+  Object.assign(PL, { key, title, sub, parts, urls: await Promise.all(parts.map((p) => fileLink(p.id))), dur: parts.map(() => 0), idx: 0 });
+  // durées de chaque partie (métadonnées seulement), pour une seule barre de lecture
+  await Promise.all(PL.urls.map((u, i) => new Promise((ok) => { const a = new Audio(); a.preload = 'metadata'; a.onloadedmetadata = () => { PL.dur[i] = isFinite(a.duration) ? a.duration : 0; ok(); }; a.onerror = ok; a.src = u; setTimeout(ok, 8000); })));
+  PL.audio.src = PL.urls[0];
+  PL.audio.playbackRate = PL.rate;
+  const saved = +(store.get('pos:' + key) || 0);
+  if (saved > 5 && saved < plTotal() - 5) plSeek(saved);
+  if ('mediaSession' in navigator) {
+    navigator.mediaSession.metadata = new MediaMetadata({ title, artist: sub, album: 'ECAM' });
+    navigator.mediaSession.setActionHandler('play', () => plPlay());
+    navigator.mediaSession.setActionHandler('pause', () => PL.audio.pause());
+    navigator.mediaSession.setActionHandler('seekbackward', () => plSeek(plPos() - 15));
+    navigator.mediaSession.setActionHandler('seekforward', () => plSeek(plPos() + 15));
+    navigator.mediaSession.setActionHandler('seekto', (d) => plSeek(d.seekTime));
+  }
+}
+function plSeek(t) {
+  t = Math.min(Math.max(0, t), Math.max(0, plTotal() - 0.5));
+  let i = 0;
+  while (i < PL.dur.length - 1 && t >= plStart(i + 1)) i++;
+  const playing = !PL.audio.paused, within = t - plStart(i);
+  if (i !== PL.idx) { PL.idx = i; PL.audio.src = PL.urls[i]; PL.audio.playbackRate = PL.rate; }
+  const go = () => { PL.audio.currentTime = within; if (playing) PL.audio.play().catch(() => {}); };
+  PL.audio.readyState >= 1 ? go() : PL.audio.addEventListener('loadedmetadata', go, { once: true });
+  plUI();
+}
+const plPlay = () => PL.audio.play().catch((e) => toast('Lecture impossible : ' + e.message));
+PL.audio.addEventListener('ended', () => {
+  if (PL.idx < PL.urls.length - 1) { PL.idx++; PL.audio.src = PL.urls[PL.idx]; PL.audio.playbackRate = PL.rate; plPlay(); }
+  else store.set('pos:' + PL.key, '0');
+});
+PL.audio.addEventListener('error', () => { if (PL.key) toast('Lecture interrompue (réseau ?) — touche lecture pour reprendre'); });
+let plSaveAt = 0;
+['timeupdate', 'play', 'pause'].forEach((ev) => PL.audio.addEventListener(ev, () => {
+  plUI();
+  if (Date.now() - plSaveAt > 4000) { plSaveAt = Date.now(); store.set('pos:' + PL.key, String(Math.floor(plPos()))); }
+}));
+function plUI() {
+  const on = !PL.audio.paused, pos = plPos(), tot = plTotal();
+  document.querySelectorAll(`[data-player="${CSS.escape(PL.key || '')}"]`).forEach((el) => {
+    el.classList.toggle('playing', on);
+    const r = $('.pl-range', el); if (r && !r.matches(':active')) { r.max = Math.max(1, tot); r.value = pos; r.style.setProperty('--p', (tot ? (pos / tot) * 100 : 0) + '%'); }
+    $('.pl-cur', el) && ($('.pl-cur', el).textContent = hms(pos));
+    $('.pl-tot', el) && ($('.pl-tot', el).textContent = '−' + hms(tot - pos));
+  });
+  miniPlayer();
+}
+// Mini-lecteur au-dessus de la barre d'onglets, tant qu'un cours est chargé
+function miniPlayer() {
+  let bar = $('#mini-player');
+  const here = view.querySelector(`.player[data-player="${CSS.escape(PL.key || '')}"]`);
+  if (!PL.key || here || (PL.audio.paused && !plPos())) { bar?.remove(); return; }
+  if (!bar) {
+    bar = document.createElement('div'); bar.id = 'mini-player'; document.body.appendChild(bar);
+    bar.onclick = (e) => { if (e.target.closest('.mp-play')) { e.stopPropagation(); PL.audio.paused ? plPlay() : PL.audio.pause(); return; } if (e.target.closest('.mp-close')) { e.stopPropagation(); PL.audio.pause(); PL.key = null; bar.remove(); return; } location.hash = PL.key.startsWith('doc:') ? '#doc/' + PL.key.slice(4) : '#cours/' + encodeURIComponent(PL.key.split('#')[0]); };
+  }
+  const tot = plTotal();
+  bar.innerHTML = `<i style="width:${tot ? (plPos() / tot) * 100 : 0}%"></i><button class="mp-play" aria-label="${PL.audio.paused ? 'Lecture' : 'Pause'}">${PL.audio.paused ? '▶' : '❚❚'}</button><div class="grow"><b>${esc(PL.title)}</b><small>${esc(PL.sub)} · ${hms(plPos())} / ${hms(tot)}</small></div><button class="mp-close" aria-label="Fermer">${icon('x')}</button>`;
+}
+// Bloc lecteur d'un cours (dans sa page)
+function playerHtml(key, rec, label) {
+  return `<div class="card player" data-player="${esc(key)}">
+    <div class="pl-top"><button class="pl-play" aria-label="Lecture / pause"><span class="i-play">▶</span><span class="i-pause">❚❚</span></button>
+      <div class="grow"><div class="t">${esc(label)}</div><div class="s">${rec.parts.length > 1 ? 'Enregistrement complet' : 'Enregistrement'} · ${size(rec.size)}</div></div></div>
+    <input class="pl-range" type="range" min="0" max="1" step="1" value="0" aria-label="Position">
+    <div class="pl-times"><span class="pl-cur">0:00</span><span class="pl-tot"></span></div>
+    <div class="pl-ctl"><button data-pl="-15" aria-label="Reculer de 15 s">−15 s</button><button class="pl-rate" aria-label="Vitesse">${PL.rate}×</button><button data-pl="15" aria-label="Avancer de 15 s">+15 s</button></div>
+  </div>`;
+}
+function bindPlayers(root, ctx) {
+  root.querySelectorAll('.player').forEach((el) => {
+    const key = el.dataset.player, rec = ctx[key];
+    const ready = async () => { if (PL.key !== key) { el.classList.add('loading'); try { await plLoad(key, rec.label, rec.sub, rec.parts); } finally { el.classList.remove('loading'); } } };
+    $('.pl-play', el).onclick = async () => { await ready(); PL.audio.paused ? plPlay() : PL.audio.pause(); };
+    el.querySelectorAll('[data-pl]').forEach((b) => (b.onclick = async () => { await ready(); plSeek(plPos() + +b.dataset.pl); }));
+    $('.pl-rate', el).onclick = (e) => { const r = [1, 1.25, 1.5, 1.75, 2]; PL.rate = r[(r.indexOf(PL.rate) + 1) % r.length]; store.set('rate', String(PL.rate)); PL.audio.playbackRate = PL.rate; e.target.textContent = PL.rate + '×'; };
+    const range = $('.pl-range', el);
+    range.oninput = () => { range.style.setProperty('--p', (range.value / range.max) * 100 + '%'); $('.pl-cur', el).textContent = hms(+range.value); };
+    range.onchange = async () => { await ready(); plSeek(+range.value); };
+    if (PL.key === key) plUI();
+  });
+}
+
+// ---------- Lecteur de documents, en plein écran : audio, texte, PDF, Word, PowerPoint, images ----------
+const loadScript = (src) => new Promise((ok, ko) => { if (document.querySelector(`script[src="${src}"]`)) return ok(); const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => ko(new Error('chargement impossible')); document.head.appendChild(s); });
+const extOf = (f) => (f.name.split('.').pop() || '').toLowerCase();
+const kindOf = (f) => (f.kind === 'audio' ? 'audio' : f.kind === 'fiche' || f.kind === 'transcript' || /^text\//.test(f.mime || '') || ['txt', 'md'].includes(extOf(f)) ? 'text'
+  : /pdf/.test(f.mime || '') || extOf(f) === 'pdf' ? 'pdf' : /^image\//.test(f.mime || '') || ['jpg', 'jpeg', 'png', 'heic', 'webp', 'gif'].includes(extOf(f)) ? 'image'
+  : extOf(f) === 'docx' ? 'docx' : ['pptx', 'ppt'].includes(extOf(f)) ? 'pptx' : 'other');
+function vDoc(id) {
+  const f = S.files.find((x) => x.id === id);
+  if (!f) { view.innerHTML = `<a class="back" href="javascript:history.back()">${icon('chevron-left')}Retour</a><div class="empty">Document introuvable</div>`; return; }
+  const k = kindOf(f), name = f.name.split('/').pop();
+  view.innerHTML = `<a class="back" href="javascript:history.back()">${icon('chevron-left')}Retour</a>
+    <div class="head"><div><h1 style="font-size:22px;word-break:break-word">${esc(name)}</h1><div class="sub">${esc(f.subject)} · ${size(f.size)}</div></div>
+      <div style="display:flex;gap:8px">${NATIVE?.preview && ['pdf', 'docx', 'pptx', 'other', 'image'].includes(k) ? `<button class="icon-btn" id="d-full" aria-label="Plein écran">${icon('external')}</button>` : ''}<button class="icon-btn" id="d-more" aria-label="Plus">${icon('settings')}</button></div></div>
+    ${['pdf', 'docx', 'pptx'].includes(k) && f.has_text ? `<div class="seg doc-seg"><button class="on" data-v="orig">Document</button><button data-v="text">Texte et schémas</button></div>` : ''}
+    <div class="viewer" id="viewer"><div class="skeleton"><i></i><i></i><i></i><i></i><i></i></div></div>`;
+  $('#d-more').onclick = () => fileSheet(f);
+  $('#d-full') && ($('#d-full').onclick = async () => { try { toast('Ouverture…', 0); await NATIVE.preview({ url: location.origin + (await fileLink(id)), name }); toast(''); } catch (e) { toast(e.message); } });
+  const show = (v) => (v === 'text' ? renderText(id, true) : renderDoc(f, k));
+  view.querySelectorAll('.doc-seg button').forEach((b) => (b.onclick = () => { view.querySelectorAll('.doc-seg button').forEach((x) => x.classList.toggle('on', x === b)); show(b.dataset.v); }));
+  show(k === 'pptx' || k === 'other' ? (f.has_text ? 'text' : 'orig') : 'orig');
+  if (k === 'pptx' && f.has_text) view.querySelectorAll('.doc-seg button').forEach((x) => x.classList.toggle('on', x.dataset.v === 'text'));
+}
+const stillOn = (id) => location.hash.includes(id);
+async function renderText(id, analysed) {
+  const box = $('#viewer');
+  try {
+    const t = await (await api('/files/' + id + (analysed ? '/text' : ''))).text();
+    if (!stillOn(id)) return;
+    // « --- Page 3 --- » / « [Schéma] … » : mis en forme pour la lecture
+    box.innerHTML = `<div class="doc">${esc(t).replace(/^--- (.+?) ---$/gm, '<h3>$1</h3>').replace(/^\[Schéma\] (.*)$/gm, '<div class="schema"><b>Schéma</b> $1</div>').replace(/\n/g, '<br>')}</div>`;
+  } catch (e) { box.innerHTML = `<p class="note">${esc(e.message)}</p>`; }
+}
+async function renderDoc(f, k) {
+  const box = $('#viewer'), id = f.id;
+  try {
+    if (k === 'text') return f.kind === 'fiche' ? (location.hash = '#fiche/' + id) : renderText(id);
+    const url = await fileLink(id);
+    if (!stillOn(id)) return;
+    if (k === 'audio') {
+      const rec = { parts: [f], size: f.size, label: f.name, sub: f.subject };
+      box.innerHTML = playerHtml('doc:' + id, rec, f.name);
+      return bindPlayers(box, { ['doc:' + id]: rec });
+    }
+    if (k === 'image') return (box.innerHTML = `<img class="doc-img" src="${url}" alt="${esc(f.name)}">`);
+    if (k === 'pdf') {
+      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      const pdf = await pdfjsLib.getDocument(url).promise;
+      if (!stillOn(id)) return;
+      box.innerHTML = `<div class="pdf-pages">${Array.from({ length: pdf.numPages }, (_, i) => `<div class="pdf-page" data-n="${i + 1}"><canvas></canvas><span>${i + 1} / ${pdf.numPages}</span></div>`).join('')}</div>`;
+      // pages dessinées à l'approche de l'écran seulement (un PDF de 80 pages reste fluide)
+      const io = new IntersectionObserver((ents) => ents.forEach(async (en) => {
+        if (!en.isIntersecting || en.target.dataset.done) return;
+        en.target.dataset.done = 1; io.unobserve(en.target);
+        const page = await pdf.getPage(+en.target.dataset.n), c = $('canvas', en.target);
+        const w = en.target.clientWidth, base = page.getViewport({ scale: 1 }), dpr = Math.min(devicePixelRatio || 1, 2);
+        const vp = page.getViewport({ scale: (w / base.width) * dpr });
+        c.width = vp.width; c.height = vp.height; c.style.aspectRatio = `${vp.width} / ${vp.height}`;
+        await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+      }), { rootMargin: '600px' });
+      box.querySelectorAll('.pdf-page').forEach((p) => io.observe(p));
+      return;
+    }
+    if (k === 'docx') {
+      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js');
+      const buf = await (await fetch(url)).arrayBuffer();
+      const out = await mammoth.convertToHtml({ arrayBuffer: buf });
+      if (stillOn(id)) box.innerHTML = `<div class="doc docx">${out.value}</div>`;
+      return;
+    }
+    // PowerPoint et autres : pas d'affichage fidèle possible dans une page web
+    box.innerHTML = `<div class="empty">${icon('file')}<div>${k === 'pptx' ? 'Diaporama PowerPoint' : 'Ce type de fichier'} : ${NATIVE?.preview ? 'touche ' + icon('external') + ' pour l’ouvrir en plein écran.' : 'télécharge-le pour l’ouvrir.'}</div>
+      <a class="btn secondary" style="margin-top:14px;display:inline-block" href="${url}&dl=1">Télécharger</a></div>`;
+  } catch (e) { box.innerHTML = `<p class="note">Affichage impossible : ${esc(e.message)}</p>`; }
+}
+// Déplacer / télécharger / supprimer un fichier
+function fileSheet(f) {
+  openSheet(`<h2>${esc(f.name.split('/').pop())}</h2><p class="note">${size(f.size)} · ${esc(f.subject)}</p>
+    <button class="btn" id="fs-dl">Télécharger / partager</button><button class="btn secondary" id="fs-move">Déplacer vers un autre cours</button><button class="btn danger" id="fs-del">${icon('trash')}Supprimer</button>`, (sh) => {
+    $('#fs-move', sh).onclick = () => moveSheet(f);
+    $('#fs-dl', sh).onclick = async () => {
+      toast('Préparation…', 0);
+      try { const blob = await (await api('/files/' + f.id)).blob(); download(new File([blob], f.name.split('/').pop(), { type: f.mime })); toast('Prêt'); } catch (e) { toast(e.message); }
+      closeSheet();
+    };
+    $('#fs-del', sh).onclick = async () => {
+      if (!confirm(`Supprimer « ${f.name.split('/').pop()} » ?`)) return;
+      try { await api('/files/' + f.id, { method: 'DELETE' }); } catch (e) { return toast(e.message); }
+      closeSheet(); toast('Supprimé'); if (location.hash.startsWith('#doc/')) history.back(); refresh();
+    };
+  });
+}
+// Toutes les transcriptions d'un enregistrement, à la suite, dans l'ordre des parties
+async function vTranscript(uid) {
+  const fs = filesOf((f) => f.event_uid === uid);
+  const ts = [...recordingsOf(fs).flatMap((r) => r.transcripts), ...fs.filter((t) => t.kind === 'transcript' && !t.parent)];
+  const e = findEvent(uid);
+  view.innerHTML = `<a class="back" href="javascript:history.back()">${icon('chevron-left')}Retour</a>
+    <div class="head"><div><h1 style="font-size:24px">Transcription</h1><div class="sub">${esc(e?.subject || '')}${e ? ' · ' + dayLabel(e.start) : ''}</div></div></div>
+    <div class="doc" id="doc"><div class="skeleton"><i></i><i></i><i></i><i></i></div></div>`;
+  try {
+    const parts = await Promise.all(ts.map(async (t) => store.get('tr:' + t.id) || (await (await api('/files/' + t.id)).text())));
+    ts.forEach((t, i) => store.set('tr:' + t.id, parts[i]));
+    if (location.hash.startsWith('#transcription/')) $('#doc').innerHTML = parts.length ? `<p style="white-space:pre-wrap">${esc(parts.join('\n\n'))}</p>` : '<p class="note">Pas encore de transcription.</p>';
+  } catch (er) { $('#doc').innerHTML = `<p class="note">${esc(er.message)}</p>`; }
+}
+
 // ---------- Actions ----------
 function download(blob, name) {
   const a = document.createElement('a');
@@ -861,7 +1094,11 @@ function download(blob, name) {
 
 async function openFile(id) {
   const f = S.files.find((x) => x.id === id);
+  if (!f) return toast('Fichier introuvable');
+  if (f.kind === 'transcript' && f.event_uid) return (location.hash = '#transcription/' + encodeURIComponent(f.event_uid));
   if (f.kind === 'fiche' || f.kind === 'transcript') return (location.hash = '#fiche/' + id);
+  if (f.kind === 'audio' && f.event_uid) return (location.hash = '#cours/' + encodeURIComponent(f.event_uid));
+  return (location.hash = '#doc/' + id);
   openSheet(`<h2>${esc(f.name)}</h2><p class="note">${size(f.size)} · ${esc(f.subject)}</p>
     <button class="btn" id="open">Ouvrir</button><button class="btn secondary" id="move">Déplacer vers un autre cours</button><button class="btn danger" id="del">${icon('trash')}Supprimer</button>`, (sh) => {
     $('#move', sh).onclick = () => moveSheet(f);
@@ -1319,15 +1556,21 @@ function render(animate = true, anim) {
   tabbar.hidden = false;
   const [route, arg] = location.hash.slice(1).split('/').map(decodeURIComponent);
   if (route === 'agenda' && /^\d{4}-\d{2}-\d{2}$/.test(arg || '')) selDay = arg;
-  const tab = { cours: 'agenda', matiere: 'devoirs', matieres: 'devoirs', rappels: 'devoirs', reglages: 'ecam', note: 'notes', fiche: null }[route] ?? (route || 'agenda');
+  const tab = { cours: 'agenda', matiere: 'devoirs', matieres: 'devoirs', rappels: 'devoirs', reglages: 'ecam', note: 'notes', fiche: null, doc: null, transcription: null }[route] ?? (route || 'agenda');
   const wide = matchMedia('(min-width: 1024px)').matches;
   tabbar.querySelectorAll('a').forEach((a) => a.classList.toggle('on', a.dataset.tab === (wide && route === 'reglages' ? 'reglages' : tab)));
   moveIndicator();
   const prevScroll = view.scrollTop;
   if (route === 'fiche') { if (animate) { vFiche(arg); view.scrollTop = 0; play('push'); } return; }
-  view.innerHTML = route === 'cours' ? vCours(arg) : route === 'matieres' ? vRappels('matieres') : route === 'assistant' ? vAssistant() : route === 'matiere' ? vMatiere(arg) : route === 'rappels' || route === 'devoirs' ? vRappels(arg) : route === 'notes' ? vNotes() : route === 'note' ? vNote(arg) : route === 'ecam' ? vEcam() : route === 'reglages' ? vReglages() : vAgenda();
-  if (animate) { play(/^(cours|matiere|reglages|note)$/.test(route) ? 'push' : 'enter'); view.scrollTop = 0; } else { view.scrollTop = prevScroll; if (anim) play(anim); }
-  bind(route, arg);
+  if (route === 'doc' || route === 'transcription') { if (animate) { (route === 'doc' ? vDoc : vTranscript)(arg); view.scrollTop = 0; play('push'); } miniPlayer(); return; }
+  try {
+    view.innerHTML = route === 'cours' ? vCours(arg) : route === 'matieres' ? vRappels('matieres') : route === 'assistant' ? vAssistant() : route === 'matiere' ? vMatiere(arg) : route === 'rappels' || route === 'devoirs' ? vRappels(arg) : route === 'notes' ? vNotes() : route === 'note' ? vNote(arg) : route === 'ecam' ? vEcam() : route === 'reglages' ? vReglages() : vAgenda();
+    if (animate) { play(/^(cours|matiere|reglages|note)$/.test(route) ? 'push' : 'enter'); view.scrollTop = 0; } else { view.scrollTop = prevScroll; if (anim) play(anim); }
+    bind(route, arg);
+  } catch (err) { // une page qui plante ne doit pas bloquer l'app : on l'explique et on propose de recharger
+    console.error(err);
+    view.innerHTML = `<div class="empty">${icon('x')}<div><b>Cette page n’a pas pu s’afficher</b><br><span class="note">${esc(err.message)}</span></div><button class="btn secondary" style="margin-top:14px" onclick="location.reload()">Recharger</button></div>`;
+  }
 }
 
 function moveIndicator() {
@@ -1444,6 +1687,8 @@ function bindRows(root) {
 function bind(route, arg) {
   bindRows(view);
   bindCharts(view);
+  if (route === 'cours') bindPlayers(view, coursRecs);
+  miniPlayer();
   if (route === 'agenda' || !route) { centerDay(); wheelDays(); pagerTouch(); }
   view.querySelectorAll('[data-file]').forEach((b) => (b.onclick = () => openFile(b.dataset.file)));
   view.querySelectorAll('[data-prog]').forEach((b) => (b.onclick = () => askProgramme(b.dataset.prog)));
@@ -1536,7 +1781,7 @@ let swipe = null;
 addEventListener('touchstart', (e) => {
   if (NATIVE) return; // dans l'app iPhone, c'est le geste natif d'iOS qui fait le retour
   const t = e.touches[0];
-  swipe = t.clientX < 24 && /^#(cours|matiere|fiche|reglages|note)/.test(location.hash) ? { x: t.clientX, y: t.clientY } : null;
+  swipe = t.clientX < 24 && /^#(cours|matiere|fiche|reglages|note|doc|transcription)/.test(location.hash) ? { x: t.clientX, y: t.clientY } : null;
 }, { passive: true });
 addEventListener('touchend', (e) => {
   const t = e.changedTouches[0];
