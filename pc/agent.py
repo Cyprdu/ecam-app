@@ -46,6 +46,8 @@ def log(*a):
     print(line, flush=True)
     with open(HERE / "agent.log", "a", encoding="utf-8") as f:  # pythonw n'a pas de console
         f.write(line + "\n")
+    if "STATUS" in globals():
+        STATUS["now"] = " ".join(map(str, a))
 
 
 # ---------- Cloud ----------
@@ -481,18 +483,71 @@ def whisper():
     return _model
 
 
+CHUNK_S = 600  # transcription par tranches de 10 min
+
+
+def transcribe_worker(audio, out, start, subject, teacher):
+    """Processus à part : transcrit l'audio tranche par tranche et écrit chaque tranche finie dans `out`.
+    Si Whisper plante (bug natif sur un passage), seul ce processus meurt ; l'agent reprend à la tranche suivante."""
+    from faster_whisper.audio import decode_audio
+
+    a = decode_audio(audio)
+    prompt = f"Cours de {subject} à l'ECAM{', par ' + teacher if teacher else ''}. Transcription fidèle en français."
+    n = CHUNK_S * 16000
+    with open(out, "a", encoding="utf-8") as fh:
+        for i in range(int(start), (len(a) + n - 1) // n):
+            segs, _ = whisper().transcribe(a[i * n:(i + 1) * n], language="fr", beam_size=5, vad_filter=True, initial_prompt=prompt)
+            fh.write(json.dumps({"i": i, "lines": [[i * CHUNK_S + s.start, s.text.strip()] for s in segs]}, ensure_ascii=False) + "\n")
+            fh.flush()
+
+
 def transcribe(audio: Path, subject, teacher):
-    segments, info = whisper().transcribe(
-        str(audio), language="fr", beam_size=5, vad_filter=True,
-        initial_prompt=f"Cours de {subject} à l'ECAM{', par ' + teacher if teacher else ''}. Transcription fidèle en français.",
-    )
+    """Transcription robuste : dans un processus séparé, par tranches ; une tranche qui fait planter Whisper
+    est notée « passage non transcrit » au lieu de bloquer (ou d'arrêter) tout l'agent."""
+    out = CACHE / "transcriptions" / (audio.stem + ".jsonl")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.unlink(missing_ok=True)
+    done, crashes = {}, 0
+    while True:
+        start = max(done, default=-1) + 1
+        r = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--transcribe-worker", str(audio), str(out), str(start), subject, teacher or ""],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=7200)
+        if out.exists():
+            for line in out.read_text(encoding="utf-8").splitlines():
+                c = json.loads(line)
+                done[c["i"]] = c["lines"]
+        if r.returncode == 0:
+            break
+        crashes += 1
+        bad = max(done, default=-1) + 1
+        if crashes > 6 or not done and crashes > 2:
+            raise RuntimeError(f"Whisper n'arrive pas à lire ce fichier ({(r.stderr or '').strip()[-200:] or 'arrêt brutal'})")
+        log(f"passage illisible vers {bad * CHUNK_S // 60} min : ignoré, la suite continue")
+        done[bad] = [[bad * CHUNK_S, "[passage non transcrit]"]]
+        with open(out, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"i": bad, "lines": done[bad]}, ensure_ascii=False) + "\n")
     lines, last = [], -60
-    for s in segments:
-        if s.start - last >= 60:  # repère temporel toutes les minutes
-            lines.append(f"\n[{int(s.start // 60):02d}:{int(s.start % 60):02d}]")
-            last = s.start
-        lines.append(s.text.strip())
+    for i in sorted(done):
+        for start_s, text in done[i]:
+            if start_s - last >= 60:  # repère temporel toutes les minutes
+                lines.append(f"\n[{int(start_s // 60):02d}:{int(start_s % 60):02d}]")
+                last = start_s
+            lines.append(text)
+    out.unlink(missing_ok=True)
     return " ".join(lines).strip() + "\n"
+
+
+FAILS = HERE / "echecs.json"  # enregistrements illisibles : abandonnés après 2 essais (plus de nouvel essai chaque minute)
+
+
+def failed_too_often(aid):
+    return json.loads(FAILS.read_text()).get(aid, 0) >= 2 if FAILS.exists() else False
+
+
+def note_failure(aid):
+    d = json.loads(FAILS.read_text()) if FAILS.exists() else {}
+    d[aid] = d.get(aid, 0) + 1
+    FAILS.write_text(json.dumps(d))
 
 
 # ---------- Claude ----------
@@ -540,6 +595,7 @@ def claude(prompt, cwd: Path, model="sonnet", images=()):
         out = res[-1].get("result", "") if res and not res[-1].get("is_error") else ""
     if r.returncode != 0 or not out.strip():
         raise RuntimeError((r.stderr or r.stdout or "Claude n'a rien renvoyé")[-500:])
+    note_usage(model, len(prompt) + 4800 * len(images), len(out), re.sub(r"\s+", " ", STATUS["now"])[:90])
     return out.strip()
 
 
@@ -806,8 +862,8 @@ def transcribe_audios(job, state):
             remember(transcript, cloud)
             continue
         audio = next((f for f in state["files"] if f["id"] == aid), None)
-        if not audio or audio["size"] < 4000:
-            continue  # supprimé dans l'app, ou envoi vide : on ne le traite pas
+        if not audio or audio["size"] < 4000 or failed_too_often(aid):
+            continue  # supprimé dans l'app, envoi vide, ou illisible (déjà essayé 2 fois)
         audio_path = local_path(aid) or folder / f"Enregistrement {aid[:8]}{audio_ext(audio)}"
         if not audio_path.exists():
             log("téléchargement de l'audio…")
@@ -823,6 +879,7 @@ def transcribe_audios(job, state):
             text = transcribe(audio_path, subject, p.get("teacher"))
         except Exception as e:  # fichier abîmé : il ne doit pas bloquer les autres enregistrements du cours
             log("ÉCHEC transcription de", audio_path.name, ":", e)
+            note_failure(aid)
             continue
         transcript.write_text(text, encoding="utf-8")
         log(f"transcrit en {time.time() - t0:.0f} s")
@@ -908,27 +965,46 @@ def course_files(job, state):
     return out
 
 
+PROGRAMMES = HERE / "programmes.json"  # empreinte des cours ayant servi à chaque liste de notions
+DS_RE = re.compile(r"\b(DS|contr[ôo]le|examen|partiel|interro|[ée]valuation|tomber|tombera|au programme|à réviser|révisez)\b", re.I)
+
+
 def analyse_programme(subject, state):
     """Liste des notions de la matière, dans l'ordre du cours, avec les séances où elles ont été vues."""
     dated = "\n".join(f"- {f['name']} : cours du {f['event_uid'][:10]}" for f in state["files"] if f["subject"] == subject and f.get("event_uid") and f["kind"] in ("doc", "transcript"))
     sessions = sorted({e["start"][:10] for e in state.get("events") or [] if e["subject"] == subject and e["start"][:10] <= datetime.now().strftime("%Y-%m-%d")})
+    # ce que le prof a dit du DS, dans les transcriptions (le plus récent d'abord) : peu de texte, mais décisif
+    trs = sorted((f for f in readable_files(subject_dir(subject)) if f.name.startswith("Transcription")), key=lambda f: f.stat().st_mtime, reverse=True)
+    ds_said = "\n".join(f"[{f.parent.name}] {passages(scan(f), DS_RE, 400)}" for f in trs if DS_RE.search(scan(f)))[:20000]
     prompt = f"""Matière : « {subject} ». Séances déjà passées : {', '.join(sessions) or 'inconnues'}.
 Dates des documents rattachés à un cours :
 {dated or '- aucune'}
 
+CE QUE LE PROF A DIT DU DS (passages des transcriptions, du plus récent au plus ancien) :
+{ds_said or '- rien de repéré'}
+
 Établis la liste des NOTIONS enseignées, dans l'ordre chronologique du cours :
 - 6 à 25 notions, assez précises pour qu'on puisse dire « elle est au programme du DS ou non » (ex. « Les 5 missions de l'ANSSI », pas « Cybersécurité ») ;
-- pour chacune : un titre court (60 caractères max), un résumé d'une phrase, les dates des séances où elle a été vue (parmi les séances ci-dessus, d'après les dates des documents ou leur contenu), et une importance de 1 (secondaire) à 3 (essentielle).
+- pour chacune : un titre court (60 caractères max), un résumé d'une phrase, les dates des séances où elle a été vue (parmi les séances ci-dessus, d'après les dates des documents ou leur contenu), et une importance de 1 (secondaire) à 3 (essentielle) ;
+- "ds": true si le prof a annoncé que cette notion serait au DS (passages ci-dessus), sinon false. Une notion annoncée pour le DS a l'importance 3.
 Réponds UNIQUEMENT en JSON, sans texte autour :
-[{{"titre": "...", "resume": "...", "seances": ["AAAA-MM-JJ"], "importance": 1}}]
+[{{"titre": "...", "resume": "...", "seances": ["AAAA-MM-JJ"], "importance": 1, "ds": false}}]
 
 DOCUMENTS DE L'ÉTUDIANT (fiches des cours, puis résumés des transcriptions, notes et supports) :
 {bundle(subject_sources(subject), 150000)}"""
+    # mêmes cours qu'à la dernière fois (bouton appuyé plusieurs fois) : on garde la liste, aucun token dépensé
+    seen = json.loads(PROGRAMMES.read_text()) if PROGRAMMES.exists() else {}
+    digest_key = hashlib.sha1(prompt.encode()).hexdigest()
+    if seen.get(subject) == digest_key and (state.get("programmes") or {}).get(subject):
+        log(f"notions de {subject} : rien de nouveau dans les cours depuis la dernière fois, liste gardée")
+        return
     out = claude(prompt, HERE)
     m = re.search(r"\[.*\]", out, re.S)
     notions = [n for n in (json.loads(m.group(0)) if m else []) if n.get("titre")]
     if not notions:
         raise RuntimeError("aucune notion trouvée")
+    seen[subject] = digest_key
+    PROGRAMMES.write_text(json.dumps(seen, ensure_ascii=False))
     call("/programme/save", "POST", json.dumps({"subject": subject, "notions": notions}).encode(), "application/json")
     log(f"programme de {subject} : {len(notions)} notions")
 
@@ -957,7 +1033,112 @@ def run_job(job, state):
     return md, name, path
 
 
+# ---------- Tableau de bord local : http://127.0.0.1:47321 (lancé par « Tableau de bord ECAM.cmd ») ----------
+# Ce que fait le PC en ce moment, les tâches en file (lancer maintenant / annuler), la consommation Claude, le journal.
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+STATUS = {"now": "démarrage", "busy": False, "jobs": [], "checked": None}
+WAKE = threading.Event()   # « Vérifier maintenant » : la boucle n'attend pas la minute suivante
+FORCE = set()              # tâches à lancer sans attendre (fiche d'un cours dont l'heure n'est pas encore venue)
+USAGE = HERE / "consommation.jsonl"
+JOB_NAMES = {"cours": "Fiche du cours", "programme": "Liste des notions", "revision": "Synthèse / prépa DS"}
+
+
+def note_usage(model, chars_in, chars_out, what):
+    """Chaque appel à Claude, avec une estimation des tokens (≈ 4 caractères par token)."""
+    with open(USAGE, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"t": datetime.now().isoformat(timespec="seconds"), "model": model, "in": chars_in // 4, "out": chars_out // 4, "what": what}, ensure_ascii=False) + "\n")
+
+
+def usage_today():
+    day = datetime.now().strftime("%Y-%m-%d")
+    rows = [json.loads(l) for l in USAGE.read_text(encoding="utf-8").splitlines()] if USAGE.exists() else []
+    return [r for r in rows if r["t"].startswith(day)]
+
+
+DASH = """<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ECAM — PC</title>
+<style>:root{--bg:#f7f5f2;--card:#fff;--text:#1a1714;--muted:#7a736b;--line:#e8e3dd;--accent:#e85d1c;--ok:#1e8a5a}
+@media (prefers-color-scheme:dark){:root{--bg:#0e0d0c;--card:#181716;--text:#f6f4f1;--muted:#9a938b;--line:#2a2724;--accent:#ff6a24;--ok:#4fca8d}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 "Segoe UI",system-ui,sans-serif}main{max-width:900px;margin:0 auto;padding:24px 18px 60px}
+h1{margin:0 0 4px;font-size:26px}h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:26px 2px 8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px}.state{display:flex;align-items:center;gap:12px;font-size:16px}
+.dot{width:12px;height:12px;border-radius:50%;background:var(--muted);flex:none}.busy .dot{background:var(--accent);animation:p 1.2s infinite}@keyframes p{50%{opacity:.3}}
+table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:8px 6px;border-top:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-weight:600;font-size:13px;border-top:0}
+button{font:inherit;border:0;border-radius:9px;padding:6px 12px;background:var(--accent);color:#fff;cursor:pointer}button.sec{background:var(--line);color:var(--text)}
+.muted{color:var(--muted)}pre{white-space:pre-wrap;font:12.5px/1.5 Consolas,monospace;margin:0;max-height:420px;overflow:auto}.tiles{display:flex;gap:10px;flex-wrap:wrap}.tile{flex:1;min-width:160px}.tile b{display:block;font-size:24px}
+</style></head><body><main><h1>ECAM — ce que fait le PC</h1><div class="muted">Se met à jour toutes les 3 secondes · <button class="sec" onclick="act('wake')">Vérifier maintenant</button></div>
+<h2>En ce moment</h2><div class="card state" id="state"><span class="dot"></span><span id="now">…</span></div>
+<h2>Tâches en file</h2><div class="card"><table><thead><tr><th>Tâche</th><th>Matière</th><th>Depuis</th><th>État</th><th></th></tr></thead><tbody id="jobs"></tbody></table></div>
+<h2>Claude aujourd'hui (abonnement Pro)</h2><div class="tiles" id="use"></div><div class="card" style="margin-top:10px"><table><thead><tr><th>Heure</th><th>Modèle</th><th>Tokens (≈)</th><th>Pour</th></tr></thead><tbody id="calls"></tbody></table></div>
+<h2>Journal</h2><div class="card"><pre id="log"></pre></div></main>
+<script>
+const esc=(s)=>String(s??'').replace(/[&<>"]/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
+async function act(a,id){await fetch('/'+a+(id?'?id='+id:''),{method:'POST',headers:{'x-ecam':'1'}});load();}
+async function load(){try{const d=await (await fetch('/api')).json();
+document.getElementById('state').className='card state'+(d.busy?' busy':'');document.getElementById('now').textContent=(d.busy?'Travaille : ':'En attente — ')+d.now;
+document.getElementById('jobs').innerHTML=d.jobs.map(j=>`<tr><td>${esc(j.name)}</td><td>${esc(j.subject)}</td><td class="muted">${esc(j.created)}</td><td>${j.status==='running'?'<b style="color:var(--accent)">en cours</b>':'en attente'}${j.waiting?'<div class="muted">'+esc(j.waiting)+'</div>':''}</td><td style="white-space:nowrap">${j.status==='pending'?`<button onclick="act('run','${j.id}')">Lancer maintenant</button> `:''}<button class="sec" onclick="if(confirm('Annuler cette tâche ?'))act('cancel','${j.id}')">Annuler</button></td></tr>`).join('')||'<tr><td colspan=5 class="muted">Rien à faire.</td></tr>';
+const u=d.usage;document.getElementById('use').innerHTML=`<div class="card tile"><span class="muted">Appels</span><b>${u.calls}</b></div>`+Object.entries(u.byModel).map(([m,t])=>`<div class="card tile"><span class="muted">${esc(m)}</span><b>${t.toLocaleString('fr-FR')}</b><span class="muted">tokens ≈</span></div>`).join('');
+document.getElementById('calls').innerHTML=u.last.map(c=>`<tr><td class="muted">${c.t.slice(11,16)}</td><td>${esc(c.model)}</td><td>${(c.in+c.out).toLocaleString('fr-FR')}</td><td>${esc(c.what)}</td></tr>`).join('')||'<tr><td colspan=4 class="muted">Aucun appel aujourd\\'hui.</td></tr>';
+const l=document.getElementById('log');const atEnd=l.scrollTop+l.clientHeight>=l.scrollHeight-20;l.textContent=d.log;if(atEnd)l.scrollTop=l.scrollHeight;
+}catch(e){document.getElementById('now').textContent="L'agent ne répond pas (arrêté ?) — relance « Tableau de bord ECAM »";}}
+load();setInterval(load,3000);
+</script></body></html>"""
+
+
+class Dash(BaseHTTPRequestHandler):
+    def log_message(self, *a):  # pas de bruit dans la console
+        pass
+
+    def send(self, code, body, ctype="application/json; charset=utf-8"):
+        data = body.encode("utf-8") if isinstance(body, str) else body
+        self.send_response(code)
+        self.send_header("content-type", ctype)
+        self.send_header("content-length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        if self.path == "/":
+            return self.send(200, DASH, "text/html; charset=utf-8")
+        if self.path == "/api":
+            calls = usage_today()
+            by = {}
+            for c in calls:
+                by[c["model"]] = by.get(c["model"], 0) + c["in"] + c["out"]
+            logf = HERE / "agent.log"
+            tail = logf.read_text(encoding="utf-8", errors="replace").splitlines()[-80:] if logf.exists() else []
+            return self.send(200, json.dumps({**STATUS, "usage": {"calls": len(calls), "byModel": by, "last": calls[-15:][::-1]}, "log": "\n".join(tail)}, ensure_ascii=False))
+        self.send(404, "{}")
+
+    def do_POST(self):
+        if self.headers.get("x-ecam") != "1":  # une page web extérieure ne peut pas déclencher d'action
+            return self.send(403, "{}")
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        jid = (q.get("id") or [""])[0]
+        action = urllib.parse.urlparse(self.path).path
+        if action == "/run" and jid:
+            FORCE.add(jid)
+        elif action == "/cancel" and jid:
+            try:
+                call(f"/jobs/{jid}", "DELETE")
+                STATUS["jobs"] = [j for j in STATUS["jobs"] if j["id"] != jid]
+                log("tâche annulée depuis le tableau de bord")
+            except Exception as e:
+                return self.send(500, json.dumps({"error": str(e)}))
+        WAKE.set()
+        self.send(200, "{}")
+
+
+def show_jobs(jobs):
+    STATUS["jobs"] = [{"id": j["id"], "name": JOB_NAMES.get(j["type"], j["type"]) + (" (prépa DS)" if '"ds"' in (j["params"] or "") else ""), "subject": j["subject"],
+                       "created": j["created"][:16].replace("T", " "), "status": j["status"],
+                       "waiting": "attend la fin du cours + 3 h sans nouvel envoi" if j["type"] == "cours" and j["status"] == "pending" and not fiche_ready(j) and j["id"] not in FORCE else ""} for j in jobs]
+    STATUS["checked"] = datetime.now().strftime("%H:%M:%S")
+
+
 FIRST = True
+MANUAL = False  # « Vérifier maintenant » ou « Lancer maintenant » depuis le tableau de bord
 
 
 TICKS = 0
@@ -966,15 +1147,17 @@ TICKS = 0
 def tick():
     global FIRST, TICKS
     jobs = call("/jobs")
+    show_jobs(jobs)
     TICKS += 1
-    if not jobs and not FIRST and TICKS % 5:
+    if not jobs and not FIRST and not MANUAL and TICKS % 5:
         return  # ponytail: synchro complète toutes les 5 min quand rien n'attend (quota gratuit de lectures D1) ; les tâches restent vues chaque minute
     state = call("/state")
     relocate(state)
     pull_cloud(state)
     push_local(state)
     push_prompt()
-    for job in jobs:
+    # ce que l'étudiant demande (notions, synthèse, prépa DS, « lancer maintenant ») passe avant les transcriptions de fond
+    for job in sorted(jobs, key=lambda j: (j["id"] not in FORCE, j["type"] == "cours", j["created"])):
         if job["status"] == "running" and not FIRST:
             continue  # au démarrage, on reprend aussi les tâches interrompues
         if job["type"] == "cours" and not job["event_uid"] and json.loads(job["params"] or "{}").get("classify"):
@@ -984,7 +1167,8 @@ def tick():
                 log("ÉCHEC classement :", e)
             state = call("/state")
             continue
-        if job["type"] == "cours" and not fiche_ready(job):
+        STATUS["busy"] = True
+        if job["type"] == "cours" and not fiche_ready(job) and job["id"] not in FORCE:
             try:  # tout n'est peut-être pas encore envoyé : on transcrit déjà, la fiche attendra
                 transcribe_audios(job, state)
             except Exception as e:
@@ -1004,30 +1188,42 @@ def tick():
             log("ÉCHEC :", e)
             call(f"/jobs/{job['id']}/failed", "POST", b"")
         state = call("/state")
+    STATUS["busy"] = True
     scan_announcements(state)
     backfill_docs(state)  # analyse unique des nouveaux documents (texte + schémas) et résumé
+    FORCE.clear()
     FIRST = False
 
 
 if __name__ == "__main__":
-    import socket
-
-    _lock = socket.socket()
-    try:
-        _lock.bind(("127.0.0.1", 47321))  # port réservé = verrou
+    if sys.argv[1:2] == ["--transcribe-worker"]:  # processus de transcription isolé (voir transcribe)
+        transcribe_worker(*sys.argv[2:5], *sys.argv[5:7])
+        sys.exit()
+    if "--supervise" in sys.argv:  # garde-fou : relance l'agent s'il s'arrête (plantage, mise en veille…)
+        while True:
+            r = subprocess.run([sys.executable, str(Path(__file__).resolve())])
+            if r.returncode == 3:  # déjà lancé
+                sys.exit()
+            time.sleep(20)
+    try:  # le tableau de bord tient le port : c'est aussi le verrou « un seul agent à la fois »
+        server = ThreadingHTTPServer(("127.0.0.1", 47321), Dash)
     except OSError:
         if "--dry-run" not in sys.argv:
-            sys.exit("agent déjà lancé")
+            sys.exit(3)
     if "--dry-run" in sys.argv:  # aperçu de ce que la synchro enverrait dans l'app
         push_local(call("/state"), dry=True)
         sys.exit()
+    threading.Thread(target=server.serve_forever, daemon=True).start()
     once = "--once" in sys.argv
-    log("agent ECAM démarré →", CFG["cloud_url"])
+    log("agent ECAM démarré →", CFG["cloud_url"], "· tableau de bord : http://127.0.0.1:47321")
     while True:
         try:
             tick()
         except Exception as e:  # cloud injoignable, pas d'internet… on réessaie plus tard
             log("pause :", e)
+        STATUS["busy"] = False
+        STATUS["now"] = "prochaine vérification dans une minute"
         if once:
             break
-        time.sleep(60)
+        MANUAL = WAKE.wait(60)
+        WAKE.clear()

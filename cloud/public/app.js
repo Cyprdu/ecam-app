@@ -402,7 +402,7 @@ function notionsSection(name) {
     : `<button class="row" data-prog="${esc(name)}"><span class="lead">${icon('kanban')}</span><div class="grow"><div class="t">Lister les notions du cours</div><div class="s">Pour choisir ce qui tombe à chaque DS</div></div>${icon('chevron-right', 'chev')}</button>`}</div>`;
   return `<details class="notions"><summary class="section-title">Notions du cours <span style="text-transform:none;letter-spacing:0;font-weight:500">${prog.notions.length} · voir</span></summary>
     <div class="list">${prog.notions.map((n) => `<div class="row plain"><div class="grow"><div class="t" style="white-space:normal">${esc(n.titre)}${'<span class="imp"></span>'.repeat(n.importance || 0)}</div><div class="s wrap">${n.seances?.length ? n.seances.map((d) => dFmt(d, { day: 'numeric', month: 'short' })).join(', ') + ' · ' : ''}${esc(n.resume || '')}</div></div></div>`).join('')}</div>
-    <p class="note">Établie ${ago(prog.at)} · ${job ? 'mise à jour en cours…' : `<button class="link" data-prog="${esc(name)}">Mettre à jour</button>`}</p></details>`;
+    <p class="note">Établie ${ago(prog.at)} · ${job ? pcState(job) : `<button class="link" data-prog="${esc(name)}">Mettre à jour</button>`}</p></details>`;
 }
 
 // ---------- Page d'une matière : tout ce qui la concerne ----------
@@ -1254,8 +1254,15 @@ function lastDSBefore(subject, due) {
 function programmeJob(subject) {
   return S.jobs.find((j) => j.type === 'programme' && j.subject === subject && j.status !== 'done');
 }
+// État d'une demande au PC, en clair : en file, en cours, PC éteint
+function pcState(job) {
+  const seen = S.agentSeen ? (Date.now() - Date.parse(S.agentSeen)) / 60000 : Infinity;
+  if (seen > 5) return `Ton PC est éteint ou l’agent est arrêté (vu ${seen === Infinity ? 'jamais' : 'il y a ' + (seen < 120 ? Math.round(seen) + ' min' : Math.round(seen / 60) + ' h')}) : ça se fera dès qu’il sera allumé`;
+  return job.status === 'running' ? 'Ton PC y travaille en ce moment' : `En file d’attente sur ton PC (demandé ${ago(job.created)})`;
+}
 async function askProgramme(subject) {
-  try { await api('/programme', { method: 'POST', json: { subject } }); toast('Ton PC fait lister les notions par Claude — tu seras notifié', 4000); refresh(); }
+  if (programmeJob(subject)) return toast('Déjà demandé — ton PC s’en occupe (une seule fois)', 4000);
+  try { await api('/programme', { method: 'POST', json: { subject } }); toast('Demandé — si rien n’a changé dans tes cours, la liste est gardée telle quelle', 4500); refresh(); }
   catch (e) { toast(e.message); }
 }
 
@@ -1268,7 +1275,7 @@ function scopeSheet(t, ev, subject) {
     const job = programmeJob(subject);
     return openSheet(`<h2>Sur quoi porte ce DS ?</h2>
       <p class="note">Pour choisir les notions, il faut d’abord la liste des notions de <b>${esc(subject)}</b>. Ton PC la fait établir par Claude à partir de tous tes documents (transcriptions, notes, supports).</p>
-      ${job ? `<div class="list"><div class="row"><span class="lead">${icon('refresh', 'spin')}</span><div class="grow"><div class="t">Analyse en cours</div><div class="s">Dès que ton PC est allumé — tu seras notifié</div></div></div></div>`
+      ${job ? `<div class="list"><div class="row"><span class="lead">${icon('refresh', 'spin')}</span><div class="grow"><div class="t">Liste des notions demandée</div><div class="s">${pcState(job)} — tu seras notifié</div></div></div></div>`
         : `<button class="btn" id="p-go">${icon('sparkles')}Lister les notions du cours</button>`}
       <label class="field" style="margin-top:16px"><span>En attendant, tu peux le préciser toi-même</span><input id="p-text" value="${esc(sc.texte || '')}" placeholder="Ex. chapitres 1 à 3, tout sauf le RGPD"></label>
       <button class="btn secondary" id="p-save">Enregistrer</button>`, (sh) => {
@@ -1277,25 +1284,26 @@ function scopeSheet(t, ev, subject) {
     });
   }
   const last = lastDSBefore(subject, due);
-  const row = (n, i) => `<label class="pick"><input type="checkbox" data-n="${i}" ${chosen.has(n.titre) ? 'checked' : ''}><i></i><div class="grow"><div class="t">${esc(n.titre)}${'<span class="imp"></span>'.repeat(n.importance || 0)}</div><div class="s">${n.seances?.length ? n.seances.map((d) => dFmt(d, { day: 'numeric', month: 'short' })).join(', ') + ' · ' : ''}${esc(n.resume || '')}</div></div></label>`;
+  const job = programmeJob(subject), announced = prog.notions.some((n) => n.ds);
+  const row = (n, i) => `<label class="pick"><input type="checkbox" data-n="${i}" ${chosen.has(n.titre) ? 'checked' : ''}><i></i><div class="grow"><div class="t">${esc(n.titre)}${'<span class="imp"></span>'.repeat(n.importance || 0)}${n.ds ? ' <span class="chip warn" style="vertical-align:1px">annoncé DS</span>' : ''}</div><div class="s">${n.seances?.length ? n.seances.map((d) => dFmt(d, { day: 'numeric', month: 'short' })).join(', ') + ' · ' : ''}${esc(n.resume || '')}</div></div></label>`;
   openSheet(`<h2>Sur quoi porte ce DS ?</h2>
     <p class="note" style="margin-top:-8px">${esc(subject)} · ${dayLabel(due)}</p>
-    <div class="quick"><button data-q="all">Tout</button>${last ? `<button data-q="since">Depuis le dernier DS (${dFmt(last, { day: 'numeric', month: 'short' })})</button>` : ''}<button data-q="none">Aucune</button></div>
+    <div class="quick">${announced ? '<button data-q="ds">Annoncées par le prof</button>' : ''}<button data-q="all">Tout</button>${last ? `<button data-q="since">Depuis le dernier DS (${dFmt(last, { day: 'numeric', month: 'short' })})</button>` : ''}<button data-q="none">Aucune</button></div>
     <div class="list picks">${prog.notions.map(row).join('')}</div>
     <label class="field" style="margin-top:14px"><span>Précision (facultatif)</span><input id="p-text" value="${esc(sc.texte || '')}" placeholder="Ex. surtout les exercices du TD2"></label>
     <button class="btn" id="p-save">Enregistrer</button>
-    <p class="note">Liste établie ${ago(prog.at)} · <button class="link" id="p-redo">Mettre à jour</button> · <span id="p-count"></span></p>`, (sh) => {
+    <p class="note">Liste établie ${ago(prog.at)} · ${job ? `<b>Mise à jour : ${pcState(job)}</b>` : '<button class="link" id="p-redo">Mettre à jour avec les derniers cours</button>'} · <span id="p-count"></span></p>`, (sh) => {
     const boxes = [...sh.querySelectorAll('[data-n]')];
     const count = () => ($('#p-count', sh).textContent = `${boxes.filter((b) => b.checked).length} notion(s) choisie(s)`);
     boxes.forEach((b) => (b.onchange = count));
     sh.querySelectorAll('[data-q]').forEach((b) => (b.onclick = () => {
       boxes.forEach((x) => {
         const n = prog.notions[x.dataset.n];
-        x.checked = b.dataset.q === 'all' || (b.dataset.q === 'since' && (n.seances || []).some((d) => d > last.slice(0, 10)));
+        x.checked = b.dataset.q === 'all' || (b.dataset.q === 'ds' && !!n.ds) || (b.dataset.q === 'since' && (n.seances || []).some((d) => d > last.slice(0, 10)));
       });
       count();
     }));
-    $('#p-redo', sh).onclick = () => { askProgramme(subject); closeSheet(); };
+    $('#p-redo', sh)?.addEventListener('click', () => { askProgramme(subject); closeSheet(); });
     $('#p-save', sh).onclick = () => saveScope(t, ev, subject, { notions: boxes.filter((b) => b.checked).map((b) => prog.notions[b.dataset.n].titre), texte: $('#p-text', sh).value.trim() });
     count();
   });
