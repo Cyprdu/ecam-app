@@ -90,7 +90,7 @@ function subjects() {
   const names = new Set([
     ...S.events.filter((e) => COURSE_TYPE.test(e.type || '') && e.start.slice(0, 10) <= soon).map((e) => e.subject),
     ...S.subjects.filter((s) => !s.hidden).map((s) => s.name),
-    ...S.files.map((f) => f.subject),
+    ...S.files.filter((f) => f.subject !== 'Alternance').map((f) => f.subject),
   ]);
   return [...names].filter((n) => n && !hidden.has(n) && !/^Rattrapage/i.test(n)).sort((a, b) => a.localeCompare(b, 'fr'));
 }
@@ -674,6 +674,7 @@ function vEcam() {
       <a class="card tile" href="https://espace.ecam.fr/group/tools/accueil" target="_blank" rel="noopener"><span class="k">${icon('printer')}Impression</span><span class="v">${e.papercut != null ? esc(e.papercut) + ' €' : '—'}</span><span class="s">Solde PaperCut</span></a>
       <a class="card tile" href="https://bar.ecam.fr/" target="_blank" rel="noopener"><span class="k">${icon('cup')}Bar</span><span class="v">${bar.balance != null ? esc(bar.balance) + ' €' : '—'}</span><span class="s">${bar.favorite ? 'Préférée : ' + esc(bar.favorite) : 'Solde du bar'}</span></a>
     </div>
+    ${altCard()}
     <div class="section-title">Accès rapides</div>
     <div class="list">
       ${[['mail', 'Messagerie', 'https://espace.ecam.fr/group/tools/mail'], ['book', 'Moodle', 'https://moodle.ecam.fr/'], ['grid', 'Espace intranet', 'https://espace.ecam.fr/'], ['user', 'Trombinoscope', 'https://espace.ecam.fr/group/tools/trombinoscope']]
@@ -1083,6 +1084,116 @@ async function vTranscript(uid) {
     ts.forEach((t, i) => store.set('tr:' + t.id, parts[i]));
     if (location.hash.startsWith('#transcription/')) $('#doc').innerHTML = parts.length ? `<p style="white-space:pre-wrap">${esc(parts.join('\n\n'))}</p>` : '<p class="note">Pas encore de transcription.</p>';
   } catch (er) { $('#doc').innerHTML = `<p class="note">${esc(er.message)}</p>`; }
+}
+
+// ---------- Alternance 2027 : entreprises, candidatures, rappels, CV ----------
+let ALT = JSON.parse(store.get('alternance') || 'null'); // dernier état connu (affichage immédiat, même hors ligne)
+const ALT_STATUS = [['todo', 'À faire'], ['sent', 'Candidaté'], ['relance', 'Relancé'], ['interview', 'Entretien'], ['no', 'Refus'], ['yes', 'Accepté']];
+const altTasks = () => S.tasks.filter((t) => t.subject === 'Alternance').sort((a, b) => a.due.localeCompare(b.due));
+const altNext = () => altTasks().find((t) => !t.done);
+let altSaveTimer;
+function altSave() {
+  store.set('alternance', JSON.stringify(ALT));
+  clearTimeout(altSaveTimer);
+  altSaveTimer = setTimeout(() => api('/alternance', { method: 'POST', json: ALT.state }).catch((e) => toast('Pas enregistré : ' + e.message)), 600);
+}
+function altCard() { // carte de l'onglet ECAM
+  const n = altNext(), sent = ALT ? Object.values(ALT.state.companies || {}).filter((c) => c.status && c.status !== 'todo').length : 0;
+  return `<a class="card alt-card" href="#alternance"><div class="grow"><span class="k">${icon('briefcase')}Alternance 2027</span>
+    <div class="t">${n ? esc(n.title) : 'Ta recherche, étape par étape'}</div><div class="s">${n ? dayLabel(n.due) : 'Entreprises, rappels, CV'}${sent ? ` · ${sent} candidature${sent > 1 ? 's' : ''}` : ''}</div></div>${icon('chevron-right', 'chev')}</a>`;
+}
+async function vAlternance() {
+  const draw = () => { if (location.hash === '#alternance') { view.innerHTML = altHtml(); altBind(); } };
+  if (ALT) draw(); else view.innerHTML = `<a class="back" href="#ecam">${icon('chevron-left')}ECAM</a><div class="head"><div><h1>Alternance 2027</h1></div></div><div class="skeleton"><i></i><i></i><i></i><i></i></div>`;
+  try {
+    const fresh = await api('/alternance');
+    const first = !ALT;
+    ALT = { ...fresh, state: { companies: {}, ...fresh.state } };
+    store.set('alternance', JSON.stringify(ALT));
+    if (first) refresh(); // les rappels viennent d'être créés : on les récupère
+    draw();
+  } catch (e) { if (!ALT) view.innerHTML += `<p class="note">${esc(e.message)}</p>`; }
+}
+function altHtml() {
+  const { plan, state } = ALT, cs = state.companies;
+  const days = Math.round((Date.parse(plan.goal.start) - Date.now()) / 864e5);
+  const count = (k) => Object.values(cs).filter((c) => c.status === k).length;
+  const sent = Object.values(cs).filter((c) => c.status && c.status !== 'todo').length;
+  const tasks = altTasks(), next = altNext();
+  const stars = (n) => '<span class="imp"></span>'.repeat(n);
+  return `<div class="alt"><a class="back" href="#ecam">${icon('chevron-left')}ECAM</a>
+    <div class="head"><div><h1>Alternance 2027</h1><div class="sub">${esc(plan.goal.where)} · cybersécurité OT / réseaux industriels</div></div></div>
+    <div class="tiles">
+      <div class="card tile"><span class="k">${icon('calendar')}Rentrée en entreprise</span><span class="v">${days > 0 ? days : 0}<small style="font-size:15px;color:var(--muted)"> jours</small></span><span class="s">septembre 2027</span></div>
+      <div class="card tile"><span class="k">${icon('briefcase')}Candidatures</span><span class="v">${sent}</span><span class="s">${count('interview')} entretien(s) · ${count('yes')} acceptée(s)</span></div>
+    </div>
+    ${next ? `<div class="section-title">Prochaine étape</div><div class="list">${reminderRow({ ...next, isTask: true })}</div>` : ''}
+    <div class="section-title"><span>Entreprises</span><span style="text-transform:none;letter-spacing:0">les plus proches de ton programme d’abord</span></div>
+    ${plan.companies.map((c) => {
+      const s = cs[c.id] || {};
+      return `<div class="card company" data-co="${c.id}">
+        <div class="co-head"><div class="grow"><div class="t">${esc(c.name)} ${stars(c.fit)}</div><div class="s">${esc(c.where)} · ${esc(c.when)}</div></div></div>
+        <p class="co-why">${esc(c.why)}</p>
+        <div class="co-links">${c.links.map(([l, u]) => `<a class="chip" href="${esc(u)}" target="_blank" rel="noopener">${icon('external')}${esc(l)}</a>`).join('')}</div>
+        <div class="seg co-status">${ALT_STATUS.map(([k, l]) => `<button data-st="${k}" class="${(s.status || 'todo') === k ? 'on' : ''}">${l}</button>`).join('')}</div>
+        ${s.applied ? `<div class="s">Candidaté le ${dFmt(s.applied, { day: 'numeric', month: 'long' })} · relance prévue 12 jours après</div>` : ''}
+        <details><summary>Ce qu’ils attendent · quoi mettre sur le CV</summary><p><b>Attendus :</b> ${esc(c.expect)}</p><p><b>Sur ton CV :</b> ${esc(c.cv)}</p>
+          <p><b>À demander en entretien :</b> PEE, intéressement, participation ouverts aux alternants ? Abondement ? Ancienneté requise ?</p>
+          <button class="btn secondary" data-letter="${c.id}">${icon('sparkles')}Lettre de motivation pour ${esc(c.name.split(' —')[0])}</button></details>
+        <label class="field" style="margin:8px 0 0"><textarea data-note="${c.id}" rows="2" placeholder="Notes : contact, date d’entretien, réponse, PEE…">${esc(s.note || '')}</textarea></label>
+      </div>`;
+    }).join('')}
+    <div class="section-title">Ton CV et tes candidatures avec Claude</div>
+    <div class="list">
+      <button class="row" data-alt-ask="cv"><span class="lead">${icon('sparkles')}</span><div class="grow"><div class="t">Rédiger mon CV</div><div class="s">D’après ton programme et la fiche ; Claude te demande ce qui manque</div></div>${icon('chevron-right', 'chev')}</button>
+      <button class="row" data-alt-ask="linkedin"><span class="lead">${icon('user')}</span><div class="grow"><div class="t">Mon profil LinkedIn</div><div class="s">Titre, résumé, compétences</div></div>${icon('chevron-right', 'chev')}</button>
+      <button class="row" data-alt-ask="interview"><span class="lead">${icon('message')}</span><div class="grow"><div class="t">Préparer un entretien</div><div class="s">Questions probables, réponses, questions à poser</div></div>${icon('chevron-right', 'chev')}</button>
+    </div>
+    <details class="notions"><summary class="section-title">Ce que les recruteurs attendent <span style="text-transform:none;letter-spacing:0;font-weight:500">voir</span></summary><div class="list">${plan.expect.map((x) => `<div class="row plain"><div class="grow"><div class="s wrap" style="color:var(--text)">${esc(x)}</div></div></div>`).join('')}</div></details>
+    <details class="notions"><summary class="section-title">Contenu du CV <span style="text-transform:none;letter-spacing:0;font-weight:500">voir</span></summary><div class="list">${plan.cv.map((x) => `<div class="row plain"><div class="grow"><div class="s wrap" style="color:var(--text)">${esc(x)}</div></div></div>`).join('')}</div></details>
+    <div class="section-title">Où chercher</div>
+    <div class="list">${plan.platforms.map(([n, u, d]) => `<a class="row" href="${esc(u)}" target="_blank" rel="noopener"><span class="lead">${icon('globe')}</span><div class="grow"><div class="t">${esc(n)}</div><div class="s">${esc(d)}</div></div>${icon('external', 'chev')}</a>`).join('')}</div>
+    <div class="section-title">Mots-clés pour tes alertes <span style="text-transform:none;letter-spacing:0;font-weight:500">touche pour copier</span></div>
+    <div class="chips">${plan.keywords.map((k) => `<button class="chip" data-copy="${esc(k + ' Lyon')}">${esc(k)}</button>`).join('')}</div>
+    <div class="section-title">Calendrier de ta recherche</div>
+    <div class="list">${tasks.map((t) => reminderRow({ ...t, isTask: true })).join('')}</div>
+    <p class="note">Rappels 3 jours avant, la veille et le jour même. Dates estimées d’après les calendriers 2026 des entreprises : à confirmer.</p>
+    <div class="list" style="margin-top:10px"><a class="row" href="${esc(ALT.calendar.replace(/^https?:/, 'webcal:'))}"><span class="lead">${icon('calendar')}</span><div class="grow"><div class="t">Ajouter à mon calendrier iPhone</div><div class="s">Calendrier « Alternance 2027 », mis à jour tout seul</div></div>${icon('chevron-right', 'chev')}</a>
+      <button class="row" data-copy="${esc(ALT.calendar)}"><span class="lead">${icon('share')}</span><div class="grow"><div class="t">Copier le lien du calendrier</div><div class="s">Pour Google Agenda ou Outlook (« s’abonner par URL »)</div></div></button></div>
+    ${S.files.some((f) => f.subject === 'Alternance') ? `<div class="section-title">Tes documents (CV, lettres)</div><div class="list">${fileRows(S.files.filter((f) => f.subject === 'Alternance'))}</div>` : ''}
+    <div class="section-title">À demander à l’école</div>
+    <div class="list">${plan.questions.map((q) => `<div class="row plain"><span class="lead">${icon('message')}</span><div class="grow"><div class="s wrap" style="color:var(--text)">${esc(q)}</div></div></div>`).join('')}</div></div>`;
+}
+const ALT_ASK = {
+  cv: 'Rédige mon CV pour une alternance de 2e année (septembre 2027) en cybersécurité OT / réseaux industriels à Lyon. Lis d’abord mon dossier d’alternance (outil alternance) et mes notes (notes_ecam). Pose-moi d’abord les questions sur ce qui manque (expériences, niveau d’anglais, projets perso, téléphone) : n’invente rien. Puis donne le CV complet, une page, et enregistre-le avec enregistrer_fiche (matière « Alternance », titre « CV alternance »).',
+  linkedin: 'Rédige mon profil LinkedIn (titre, section « Infos », compétences à ajouter) pour trouver une alternance de 2e année en cybersécurité OT à Lyon dès septembre 2027. Lis d’abord mon dossier d’alternance (outil alternance). N’invente aucune expérience : demande-moi ce qui manque.',
+  interview: 'Prépare-moi à un entretien d’alternance en cybersécurité OT / réseaux industriels. Lis d’abord mon dossier d’alternance (outil alternance). Donne les questions probables (techniques et motivation) avec des pistes de réponse tirées de mon programme, puis les questions à poser au recruteur (missions, rythme, PEE / intéressement pour les alternants). Ensuite, fais-moi passer l’entretien : une question à la fois, et corrige mes réponses.',
+};
+function altBind() {
+  const { plan, state } = ALT;
+  bindRows(view);
+  view.querySelectorAll('.company').forEach((el) => {
+    const id = el.dataset.co, c = plan.companies.find((x) => x.id === id);
+    el.querySelectorAll('[data-st]').forEach((b) => (b.onclick = async () => {
+      const s = (state.companies[id] ||= {});
+      s.status = b.dataset.st;
+      if (s.status === 'sent' && !s.applied) {
+        s.applied = todayStr();
+        // relance automatique au bout de 12 jours sans réponse (règle de la fiche : 10 à 15 jours)
+        await api('/tasks', { method: 'POST', json: { id: 'alt-relance-' + id, subject: 'Alternance', due: addDays(todayStr(), 12) + 'T09:00', title: `Relancer ${c.name.split(' —')[0]} (candidature du ${dFmt(s.applied, { day: 'numeric', month: 'short' })})`, kind: 'autre', note: 'Sans réponse depuis 12 jours : relance polie par e-mail ou LinkedIn' } }).catch(() => {});
+        toast('Candidature notée — rappel de relance dans 12 jours', 3500);
+        refresh();
+      }
+      if (['interview', 'no', 'yes'].includes(s.status)) { const t = S.tasks.find((x) => x.id === 'alt-relance-' + id); if (t && !t.done) { t.done = 1; api('/tasks', { method: 'POST', json: t }).catch(() => {}); } }
+      altSave(); draw();
+    }));
+    const note = $(`[data-note="${id}"]`, el);
+    note.oninput = () => { (state.companies[id] ||= {}).note = note.value; altSave(); };
+    $(`[data-letter="${id}"]`, el).onclick = () => askClaude(`Rédige ma lettre de motivation (courte, une page) pour une alternance chez ${c.name} (${c.where}) à partir de septembre 2027. Lis d’abord mon dossier d’alternance (outil alternance) : appuie-toi sur « pourquoi », « attendus » et « CV » de cette entreprise. N’invente rien sur moi : demande-moi ce qui manque. Enregistre-la ensuite avec enregistrer_fiche (matière « Alternance », titre « Lettre — ${c.name.split(' —')[0]} »).`);
+  });
+  view.querySelectorAll('[data-alt-ask]').forEach((b) => (b.onclick = () => askClaude(ALT_ASK[b.dataset.altAsk])));
+  view.querySelectorAll('[data-copy]').forEach((b) => (b.onclick = async () => { try { await navigator.clipboard.writeText(b.dataset.copy); toast('Copié'); } catch { toast(b.dataset.copy, 5000); } }));
+  function draw() { view.innerHTML = altHtml(); altBind(); }
 }
 
 // ---------- Actions ----------
@@ -1564,12 +1675,16 @@ function render(animate = true, anim) {
   tabbar.hidden = false;
   const [route, arg] = location.hash.slice(1).split('/').map(decodeURIComponent);
   if (route === 'agenda' && /^\d{4}-\d{2}-\d{2}$/.test(arg || '')) selDay = arg;
-  const tab = { cours: 'agenda', matiere: 'devoirs', matieres: 'devoirs', rappels: 'devoirs', reglages: 'ecam', note: 'notes', fiche: null, doc: null, transcription: null }[route] ?? (route || 'agenda');
+  const tab = { cours: 'agenda', matiere: 'devoirs', matieres: 'devoirs', rappels: 'devoirs', reglages: 'ecam', note: 'notes', fiche: null, doc: null, transcription: null, alternance: 'ecam' }[route] ?? (route || 'agenda');
   const wide = matchMedia('(min-width: 1024px)').matches;
   tabbar.querySelectorAll('a').forEach((a) => a.classList.toggle('on', a.dataset.tab === (wide && route === 'reglages' ? 'reglages' : tab)));
   moveIndicator();
   const prevScroll = view.scrollTop;
   if (route === 'fiche') { if (animate) { vFiche(arg); view.scrollTop = 0; play('push'); } return; }
+  if (route === 'alternance') {
+    if (animate || !ALT) { vAlternance(); view.scrollTop = 0; if (animate) play('push'); } else { const y = view.scrollTop; view.innerHTML = altHtml(); altBind(); view.scrollTop = y; }
+    return;
+  }
   if (route === 'doc' || route === 'transcription') { if (animate) { (route === 'doc' ? vDoc : vTranscript)(arg); view.scrollTop = 0; play('push'); } miniPlayer(); return; }
   try {
     view.innerHTML = route === 'cours' ? vCours(arg) : route === 'matieres' ? vRappels('matieres') : route === 'assistant' ? vAssistant() : route === 'matiere' ? vMatiere(arg) : route === 'rappels' || route === 'devoirs' ? vRappels(arg) : route === 'notes' ? vNotes() : route === 'note' ? vNote(arg) : route === 'ecam' ? vEcam() : route === 'reglages' ? vReglages() : vAgenda();
@@ -1789,7 +1904,7 @@ let swipe = null;
 addEventListener('touchstart', (e) => {
   if (NATIVE) return; // dans l'app iPhone, c'est le geste natif d'iOS qui fait le retour
   const t = e.touches[0];
-  swipe = t.clientX < 24 && /^#(cours|matiere|fiche|reglages|note|doc|transcription)/.test(location.hash) ? { x: t.clientX, y: t.clientY } : null;
+  swipe = t.clientX < 24 && /^#(cours|matiere|fiche|reglages|note|doc|transcription|alternance)/.test(location.hash) ? { x: t.clientX, y: t.clientY } : null;
 }, { passive: true });
 addEventListener('touchend', (e) => {
   const t = e.changedTouches[0];

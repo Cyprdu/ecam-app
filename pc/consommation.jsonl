@@ -2,3 +2,6 @@
 {"t": "2026-10-14T10:20:26", "model": "sonnet", "in": 39740, "out": 1437, "what": "résumé (une seule fois) : DS 11.pdf"}
 {"t": "2026-10-14T10:20:58", "model": "haiku", "in": 9120, "out": 3126, "what": "résumé (une seule fois) : CM2 UE Introduction aux SI_Définitions et généralités.pdf"}
 {"t": "2026-10-14T10:21:30", "model": "sonnet", "in": 29367, "out": 1767, "what": "résumé (une seule fois) : CM2 UE Introduction aux SI_Définitions et généralités.pdf"}
+{"t": "2026-10-14T10:37:16", "model": "sonnet", "in": 31300, "out": 14076, "what": "génération de la fiche avec Claude…"}
+{"t": "2026-10-14T10:37:25", "model": "haiku", "in": 5843, "out": 0, "what": "recherche d'annonces de DS : Approches vers l'entreprise et les métiers 1"}
+{"t": "2026-10-14T10:38:01", "model": "haiku", "in": 13001, "out": 2161, "what": "résumé (une seule fois) : Transcription e03279c4.txt"}

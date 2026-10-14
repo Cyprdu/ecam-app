@@ -547,3 +547,24 @@ body.offline::before {
 .schema { margin: 8px 0 14px; padding: 10px 12px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 10px 10px 0; font-size: 14px; }
 .schema b { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); margin-bottom: 2px; }
 .doc h3 { margin: 18px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+
+/* ---------- Alternance ---------- */
+.alt-card { display: flex; align-items: center; gap: 12px; padding: 14px 16px; margin-top: 12px; border-left: 4px solid var(--accent); }
+.alt-card .k { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12.5px; font-weight: 600; }
+.alt-card .k svg { width: 17px; height: 17px; }
+.alt-card .t { font-weight: 650; margin-top: 4px; }
+.alt-card .s { color: var(--muted); font-size: 13px; }
+.company { padding: 14px 16px; margin-bottom: 10px; }
+.company .t { font-weight: 700; font-size: 16px; }
+.company .s { color: var(--muted); font-size: 13px; }
+.co-why { margin: 8px 0 10px; font-size: 14px; }
+.co-links { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.co-links .chip svg { width: 13px; height: 13px; }
+.co-status { margin: 4px 0 6px; overflow-x: auto; }
+.co-status button { font-size: 12.5px; padding: 7px 6px; white-space: nowrap; }
+.company details { margin-top: 8px; font-size: 14px; }
+.company summary { cursor: pointer; color: var(--accent); font-weight: 600; font-size: 13.5px; }
+.company details p { margin: 8px 0; }
+.company textarea { width: 100%; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); font-size: 14px; resize: vertical; }
+.alt .row .t { white-space: normal; }
+.co-status { flex-wrap: nowrap; scrollbar-width: none; } .co-status::-webkit-scrollbar { display: none; } .co-status button { flex: 1 0 auto; padding: 7px 9px; }
