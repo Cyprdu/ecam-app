@@ -5,3 +5,7 @@
 {"t": "2026-10-14T10:37:16", "model": "sonnet", "in": 31300, "out": 14076, "what": "génération de la fiche avec Claude…"}
 {"t": "2026-10-14T10:37:25", "model": "haiku", "in": 5843, "out": 0, "what": "recherche d'annonces de DS : Approches vers l'entreprise et les métiers 1"}
 {"t": "2026-10-14T10:38:01", "model": "haiku", "in": 13001, "out": 2161, "what": "résumé (une seule fois) : Transcription e03279c4.txt"}
+{"t": "2026-10-14T20:55:58", "model": "haiku", "in": 16407, "out": 585, "what": "analyse des schémas (une seule fois) : Dérivé des fonctions usuels.pdf — 1 image(s)"}
+{"t": "2026-10-14T20:56:25", "model": "haiku", "in": 22902, "out": 696, "what": "analyse des schémas (une seule fois) : Méthode de différenciation.pdf — 1 image(s)"}
+{"t": "2026-10-14T20:59:02", "model": "sonnet", "in": 19319, "out": 7743, "what": "analyse des schémas (une seule fois) : Méthode de différenciation.pdf — 1 image(s)"}
+{"t": "2026-10-14T21:34:20", "model": "haiku", "in": 53806, "out": 277, "what": "analyse des schémas (une seule fois) : Ancien Sujet dexamen final_ Intro SI_2024-2025.pdf "}

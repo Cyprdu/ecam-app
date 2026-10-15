@@ -568,3 +568,4 @@ body.offline::before {
 .company textarea { width: 100%; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); font-size: 14px; resize: vertical; }
 .alt .row .t { white-space: normal; }
 .co-status { flex-wrap: nowrap; scrollbar-width: none; } .co-status::-webkit-scrollbar { display: none; } .co-status button { flex: 1 0 auto; padding: 7px 9px; }
+.mod-avg span.run { background: color-mix(in srgb, #2f5f9e 14%, transparent); color: #4a7fc4; }

@@ -585,13 +585,15 @@ function vNotes() {
   const general = r ? r.general : generalAvg(e.notes || []);
   const hist = r ? r.history.map(([date, v]) => ({ date, v })) : avgHistory(e.notes || []);
   const delta = hist.length > 1 ? hist[hist.length - 1].v - hist[hist.length - 2].v : null;
-  const noteRow = (n) => `<a class="row" href="#note/${noteId(n)}"><span class="grade ${gradeClass(n.grade)}">${esc(n.grade.replace('/20', ''))}</span><div class="grow"><div class="t">${esc(n.exam || n.label)}</div><div class="s wrap">${n.average ? 'moy. classe ' + esc(n.average.replace('/20', '')) + ' · ' : ''}${dFmt(n.date, { day: 'numeric', month: 'short' })}</div></div>${icon('chevron-right', 'chev')}</a>`;
+  // couleur : au-dessus (vert) ou en dessous (orange) de la moyenne de la classe
+  const vsClass = (n) => { const g = num(n.grade), c = num(n.average || ''); return isNaN(g) || isNaN(c) ? gradeClass(n.grade) : g >= c ? 'ok' : 'warn'; };
+  const noteRow = (n) => `<a class="row" href="#note/${noteId(n)}"><span class="grade ${vsClass(n)}">${esc(n.grade.replace('/20', ''))}</span><div class="grow"><div class="t">${esc(n.exam || n.label)}</div><div class="s wrap">${n.average ? 'moy. classe ' + esc(n.average.replace('/20', '')) + ' · ' : ''}${dFmt(n.date, { day: 'numeric', month: 'short' })}</div></div>${icon('chevron-right', 'chev')}</a>`;
   const pill = (a) => `<span class="grade ${gradeClass(a)}" style="min-width:0;padding:2px 8px;text-transform:none">${fmt2(a)}</span>`;
   const mods = r ? r.modules.filter((u) => u.ecs.some((x) => x.notes.length)) : [];
   const body = r
     ? mods.map((u) => `<div class="module">
         <div class="mod-head"><div><div class="mod-name">${esc(u.ue)}</div><div class="s">${u.ects} ECTS · ${u.ecs.filter((x) => x.notes.length).length}/${u.ecs.length} matière${u.ecs.length > 1 ? 's' : ''} notée${u.ecs.length > 1 ? 's' : ''}</div></div>
-          ${u.avg != null ? `<div class="mod-avg"><b class="${gradeClass(u.avg)}">${fmt2(u.avg)}</b><span class="${u.avg >= 10 ? 'ok' : 'warn'}">${u.ecs.every((x) => x.avg != null) ? (u.avg >= 10 ? 'Validé' : 'Non validé') : u.avg >= 10 ? 'En bonne voie' : 'Sous 10'}</span></div>` : ''}</div>
+          ${u.avg != null ? `<div class="mod-avg"><b class="${gradeClass(u.avg)}">${fmt2(u.avg)}</b><span class="${u.ecs.every((x) => x.avg != null) ? (u.avg >= 10 ? 'ok' : 'warn') : 'run'}">${u.ecs.every((x) => x.avg != null) ? (u.avg >= 10 ? 'Validé' : 'Non validé') : 'En cours de validation'}</span></div>` : ''}</div>
         ${u.ecs.filter((x) => x.notes.length).map((x) => `<div class="section-title"><span>${esc(x.ec)}</span>${x.avg != null ? pill(x.avg) : ''}</div><div class="list">${x.notes.map(noteRow).join('')}</div>`).join('')}
       </div>`).join('') + (r.other.length ? `<div class="section-title">Autres</div><div class="list">${r.other.map(noteRow).join('')}</div>` : '')
     : Object.entries((e.notes || []).reduce((m, n) => ((m[n.subject] ||= []).push(n), m), {})).map(([s, ns]) => `<div class="section-title"><span>${esc(s)}</span>${noteAvg(ns) != null ? pill(noteAvg(ns)) : ''}</div><div class="list">${ns.map(noteRow).join('')}</div>`).join('');
