@@ -2,6 +2,7 @@
 // Protocole : JSON-RPC 2.0 en HTTP simple (« Streamable HTTP » sans flux).
 import { mergeManual } from './ecam.js';
 import { PLAN } from './alternance.js';
+import { report } from './modules.js';
 
 const VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const MAX = 40000; // caractères renvoyés par lecture
@@ -126,6 +127,76 @@ export function tools(ctx) {
       },
     },
     {
+      name: 'rechercher',
+      description: "Cherche un mot ou une expression dans TOUS les cours de l'étudiant (transcriptions, fiches, textes des documents), éventuellement dans une seule matière. Renvoie les passages trouvés avec leur document et leur séance. Idéal pour retrouver ce que le prof a dit d'un sujet (« DS », « exercice 4 », « TCP ») sans tout relire.",
+      inputSchema: { type: 'object', properties: { texte: { type: 'string' }, matiere: { type: 'string', description: 'optionnel' } }, required: ['texte'] },
+      async run({ texte, matiere }) {
+        const s = matiere ? await findSubject(matiere) : null;
+        const { results } = await DB.prepare(`SELECT f.id, f.kind, f.name, f.subject, f.event_uid, p.name AS pname, p.event_uid AS puid FROM files f LEFT JOIN files p ON p.id = f.parent WHERE f.kind IN ('transcript', 'fiche', 'text') AND (f.kind != 'text' OR f.name != 'Résumé') ${s ? 'AND f.subject = ?' : ''} ORDER BY f.created DESC LIMIT 120`).bind(...(s ? [s] : [])).all();
+        // minuscules et sans accents, caractère par caractère : les positions restent celles du texte original
+        const flat = (x) => x.split('').map((c) => (c.normalize('NFD')[0] || c).toLowerCase()[0]).join('');
+        const q = flat(texte.trim()), out = [];
+        for (const f of results) {
+          if (out.length >= 25) break;
+          const t = (await (await env.FILES.get(f.id))?.text()) || '', n = flat(t);
+          let i = n.indexOf(q), hits = 0;
+          while (i >= 0 && hits < 3) { out.push(`[${f.subject} · ${f.kind === 'text' ? 'document ' + (f.pname || f.name) : f.kind === 'fiche' ? 'fiche ' + f.name : 'transcription'}${(f.event_uid || f.puid) ? ' · séance ' + session(f.event_uid || f.puid) : ''}] …${t.slice(Math.max(0, i - 220), i + q.length + 220).replace(/\s+/g, ' ')}…`); hits++; i = n.indexOf(q, i + q.length + 200); }
+        }
+        return out.length ? `${out.length} passage(s) pour « ${texte} »${s ? ' en ' + s : ''} :\n\n` + out.join('\n\n') : `Rien trouvé pour « ${texte} »${s ? ' en ' + s : ''}.`;
+      },
+    },
+    {
+      name: 'cours',
+      description: "Tout sur une séance précise : date, salle, prof, ce qui a été envoyé (enregistrement, transcription, documents, fiche), les devoirs liés, les infos ajoutées par l'étudiant et si la fiche automatique est activée. Donne la date (AAAA-MM-JJ) et la matière.",
+      inputSchema: { type: 'object', properties: { matiere: { type: 'string' }, date: { type: 'string', description: 'AAAA-MM-JJ' } }, required: ['matiere', 'date'] },
+      async run({ matiere, date }) {
+        const s = await findSubject(matiere);
+        const evs = (await ctx.allEvents(env)).filter((e) => e.subject === s && e.start.startsWith(date));
+        if (!evs.length) return `Pas de cours de ${s || matiere} le ${date}.`;
+        const opts = JSON.parse((await DB.prepare("SELECT value FROM kv WHERE key='course_opts'").first())?.value || '{}');
+        const out = [];
+        for (const e of evs) {
+          const { results: fs } = await DB.prepare("SELECT id, kind, name FROM files WHERE event_uid=? AND kind != 'text'").bind(e.uid).all();
+          const { results: ts } = await DB.prepare('SELECT title, due, done, kind FROM tasks WHERE event_uid=? OR (subject=? AND substr(due, 1, 10) >= ?) ORDER BY due LIMIT 8').bind(e.uid, s, date).all();
+          const o = opts[e.uid] || {};
+          out.push(`${e.subject} — ${e.start.replace('T', ' ')} à ${(e.end || '').slice(11)} · ${e.type || ''} · salle ${e.room || '?'} · ${e.teacher || ''}
+Fiche automatique : ${o.fiche === false ? 'désactivée' : 'activée'}${o.info ? '\nInfos ajoutées par l’étudiant : ' + o.info : ''}
+Fichiers : ${fs.map((f) => `${f.kind} « ${f.name} » (id=${f.id})`).join(' ; ') || 'aucun'}
+Devoirs et DS liés ou à venir : ${ts.map((t) => `${t.due.slice(0, 10)} ${t.kind} « ${t.title} »${t.done ? ' (fait)' : ''}`).join(' ; ') || 'aucun'}`);
+        }
+        return out.join('\n\n');
+      },
+    },
+    {
+      name: 'infos_cours',
+      description: "Ajoute des informations à une séance (ce que le prof a annoncé, matériel à prévoir, chapitre traité…) et/ou active ou désactive la fiche de révision automatique de cette séance. Les infos servent ensuite aux fiches et à Claude.",
+      inputSchema: { type: 'object', properties: { matiere: { type: 'string' }, date: { type: 'string', description: 'AAAA-MM-JJ' }, info: { type: 'string', description: 'texte ajouté aux infos existantes' }, fiche_auto: { type: 'boolean' } }, required: ['matiere', 'date'] },
+      async run({ matiere, date, info, fiche_auto }) {
+        const s = await findSubject(matiere);
+        const e = (await ctx.allEvents(env)).find((x) => x.subject === s && x.start.startsWith(date));
+        if (!e) return `Pas de cours de ${s || matiere} le ${date}.`;
+        const all = JSON.parse((await DB.prepare("SELECT value FROM kv WHERE key='course_opts'").first())?.value || '{}');
+        const o = (all[e.uid] ||= {});
+        if (info) o.info = [o.info, info].filter(Boolean).join('\n');
+        if (typeof fiche_auto === 'boolean') o.fiche = fiche_auto;
+        o.at = new Date().toISOString();
+        await DB.prepare("INSERT OR REPLACE INTO kv VALUES ('course_opts', ?)").bind(JSON.stringify(all)).run();
+        return `Cours de ${s} du ${e.start.replace('T', ' ')} : ${info ? 'infos ajoutées' : ''}${info && typeof fiche_auto === 'boolean' ? ', ' : ''}${typeof fiche_auto === 'boolean' ? 'fiche automatique ' + (fiche_auto ? 'activée' : 'désactivée') : ''}.`;
+      },
+    },
+    {
+      name: 'marquer_fait',
+      description: "Coche (ou décoche) un devoir ou un DS de l'étudiant, d'après les premiers mots de son titre (voir l'outil devoirs).",
+      inputSchema: { type: 'object', properties: { titre: { type: 'string' }, fait: { type: 'boolean' } }, required: ['titre'] },
+      async run({ titre, fait = true }) {
+        const { results } = await DB.prepare('SELECT id, title, subject, due FROM tasks ORDER BY due').all();
+        const t = results.find((x) => norm(x.title).startsWith(norm(titre))) || results.find((x) => norm(x.title).includes(norm(titre)));
+        if (!t) return 'Devoir introuvable : utilise l’outil devoirs pour voir les titres exacts.';
+        await DB.prepare('UPDATE tasks SET done=? WHERE id=?').bind(fait ? 1 : 0, t.id).run();
+        return `« ${t.title} » (${t.subject}, ${t.due.slice(0, 10)}) : ${fait ? 'fait' : 'à faire'}.`;
+      },
+    },
+    {
       name: 'consignes_fiche',
       description: "Consignes personnelles de l'étudiant pour rédiger une fiche de révision. À suivre pour toute fiche.",
       inputSchema: { type: 'object', properties: {} },
@@ -170,7 +241,9 @@ export function tools(ctx) {
       async run() {
         const e = JSON.parse((await DB.prepare("SELECT value FROM kv WHERE key='ecam'").first())?.value || '{}');
         const perso = JSON.parse((await DB.prepare("SELECT value FROM kv WHERE key='notes_perso'").first())?.value || '[]');
-        return mergeManual(e.notes, perso).map((n) => `${n.date} · ${n.subject} · ${n.exam} · ${n.grade}${n.manual ? ' (saisie par l’étudiant, pas encore sur l’intranet)' : ` (coef ${n.weight}, moyenne classe ${n.average})`}`).join('\n') || 'Aucune note (compte ECAM non connecté ?).';
+        const all = mergeManual(e.notes, perso), r = report(all);
+        const head = r.general == null ? '' : `Moyenne générale ${r.general.toFixed(2)}/20 (${r.ects}/30 ECTS évalués ; modules pondérés par leurs ECTS, validés à 10)\n` + r.modules.filter((u) => u.avg != null).map((u) => `- Module ${u.ue} (${u.ects} ECTS) : ${u.avg.toFixed(2)} — ${u.ecs.filter((x) => x.avg != null).map((x) => `${x.ec} ${x.avg.toFixed(2)}`).join(', ')}`).join('\n') + '\n\nDétail :\n';
+        return head + all.map((n) => `${n.date} · ${n.subject} · ${n.exam} · ${n.grade}${n.manual ? ' (saisie par l’étudiant, pas encore sur l’intranet)' : ` (coef ${n.weight}, moyenne classe ${n.average})`}`).join('\n') || 'Aucune note (compte ECAM non connecté ?).';
       },
     },
     {
@@ -211,7 +284,7 @@ export async function handleMcp(req, ctx) {
           protocolVersion: VERSIONS.includes(m.params?.protocolVersion) ? m.params.protocolVersion : VERSIONS[0],
           capabilities: { tools: {} },
           serverInfo: { name: 'ECAM', version: '1.0.0' },
-          instructions: "Accès aux cours d'un étudiant de l'ECAM : emploi du temps, transcriptions, supports, fiches, notes, devoirs. Pour une fiche : consignes_fiche, puis dossier_revision (UN appel, contenu déjà résumé), puis enregistrer_fiche. N'ouvre un document entier (lire_document complet=true) que s'il manque un point précis.",
+          instructions: "Accès aux cours d'un étudiant de l'ECAM : emploi du temps, transcriptions, supports, fiches, notes, devoirs. Pour retrouver ce qu'un prof a dit : rechercher. Pour une séance : cours. Pour une fiche : consignes_fiche, puis dossier_revision (UN appel, contenu déjà résumé), puis enregistrer_fiche. N'ouvre un document entier (lire_document complet=true) que s'il manque un point précis.",
         });
       case 'ping':
         return ok({});

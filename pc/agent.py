@@ -640,12 +640,12 @@ def bundle(items, budget):
     return "\n\n".join(out) or "(aucune source lisible)"
 
 
-def fiche_cours(subject, folder: Path, linked=()):
+def fiche_cours(subject, folder: Path, linked=(), info=""):
     session = [f for f in readable_files(folder) if f.name != "Fiche de révision.md"]
     session += [f for f in linked if f not in session]
-    if not session:
+    if not session and not info:
         raise RuntimeError("rien à analyser pour ce cours (ni enregistrement, ni document)")
-    items = []
+    items = [("Infos ajoutées par l'étudiant (annonces du prof, consignes…)", info)] if info else []
     # les transcriptions d'abord, dans l'ordre où elles ont été faites (= ordre des parties de l'enregistrement)
     for f in sorted(session, key=lambda f: (not f.name.startswith("Transcription"), f.stat().st_mtime if f.name.startswith("Transcription") else 0)):
         t = scan(f, subject)  # déjà analysé à l'arrivée du document : lu dans le cache
@@ -811,10 +811,16 @@ def scan_announcements(state):
     """Ajoute aux devoirs les DS et devoirs annoncés oralement par les profs."""
     done = set(json.loads(ANNONCES.read_text())) if ANNONCES.exists() else set()
     events = state.get("events") or []
-    for f in state["files"]:
-        if f["kind"] != "transcript" or f["id"] in done:
+    sources = [(f["id"], f, lambda f=f: call(f"/files/{f['id']}").decode("utf-8", "ignore")) for f in state["files"] if f["kind"] == "transcript"]
+    for uid, o in (state.get("courseOpts") or {}).items():
+        ev = next((e for e in events if e["uid"] == uid), None)
+        if ev and o.get("info"):  # nouvelle version du texte = nouvelle analyse
+            key = "info:" + hashlib.sha1((uid + o["info"]).encode()).hexdigest()[:20]
+            sources.append((key, {"subject": ev["subject"], "event_uid": uid, "created": ev["start"]}, lambda t=o["info"]: t))
+    for key, f, read in sources:
+        if key in done:
             continue
-        text = call(f"/files/{f['id']}").decode("utf-8", "ignore")
+        text = read()
         found = []
         if ANNONCE_RE.search(text):
             log("recherche d'annonces de DS :", f["subject"])
@@ -830,7 +836,7 @@ def scan_announcements(state):
                 body["scope"] = {"texte": f"Annoncé par le prof : {a['portee']}"}
             call("/tasks", "POST", json.dumps(body).encode(), "application/json")
             log("annonce ajoutée aux devoirs :", f["subject"], "—", a["titre"], a["date"])
-        done.add(f["id"])
+        done.add(key)
         ANNONCES.write_text(json.dumps(sorted(done)))
 
 
@@ -1018,8 +1024,12 @@ def run_job(job, state):
         return None
     if job["type"] == "cours":
         folder = transcribe_audios(job, state)
+        opts = (state.get("courseOpts") or {}).get(job["event_uid"] or "", {})
+        if opts.get("fiche") is False:  # fiche désactivée pour ce cours : transcrit et analysé (DS, devoirs), sans fiche
+            log("fiche désactivée pour ce cours :", subject, "— transcription et analyse seulement")
+            return None
         log("génération de la fiche avec Claude…")
-        md = fiche_cours(subject, folder, course_files(job, state))
+        md = fiche_cours(subject, folder, course_files(job, state), opts.get("info", ""))
         path = folder / "Fiche de révision.md"
         path.write_text(md, encoding="utf-8")
         return md, "Fiche du cours", path

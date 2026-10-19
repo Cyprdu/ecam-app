@@ -132,7 +132,7 @@ export function mergeManual(notes, manual) {
   });
   for (const m of manual.filter((m) => !m.replaces)) {
     if (out.some((n) => n.subject === m.subject && !n.manual && days(n.date, m.date) <= 5)) continue; // la vraie note est arrivée
-    out.push({ grade: m.grade, subject: m.subject, exam: m.exam, label: `${m.subject} - ${m.exam}`, weight: m.weight || '', average: m.average || '', teacher: '', date: m.date, manual: true });
+    out.push({ grade: m.grade, subject: m.subject, exam: m.exam, label: `${m.subject} - ${m.exam}`, weight: m.weight || '', average: m.average || '', teacher: '', date: m.date, manual: true, perso: m.id || null });
   }
   return out.sort((a, b) => b.date.localeCompare(a.date));
 }

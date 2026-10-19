@@ -96,6 +96,10 @@ public class RecorderPlugin: CAPPlugin, CAPBridgedPlugin {
                 content.body = it["body"] as? String ?? ""
                 content.sound = .default
                 content.userInfo = ["url": it["url"] as? String ?? "/#devoirs"]
+                if it["important"] as? Bool == true { // cours dans un autre bâtiment : passe en avant (mode Concentration compris si autorisé)
+                    content.interruptionLevel = .timeSensitive
+                    content.relevanceScore = 1
+                }
                 let when = cal.dateComponents(in: cal.timeZone, from: date)
                 let trigger = UNCalendarNotificationTrigger(dateMatching: DateComponents(timeZone: cal.timeZone, year: when.year, month: when.month, day: when.day, hour: when.hour, minute: when.minute), repeats: false)
                 center.add(UNNotificationRequest(identifier: "ecam-" + id, content: content, trigger: trigger))

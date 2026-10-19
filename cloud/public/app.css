@@ -569,3 +569,11 @@ body.offline::before {
 .alt .row .t { white-space: normal; }
 .co-status { flex-wrap: nowrap; scrollbar-width: none; } .co-status::-webkit-scrollbar { display: none; } .co-status button { flex: 1 0 auto; padding: 7px 9px; }
 .mod-avg span.run { background: color-mix(in srgb, #2f5f9e 14%, transparent); color: #4a7fc4; }
+
+/* Bâtiment hors L, options d'un cours, suppressions */
+.meta .bat { color: var(--warn); font-weight: 600; }
+.bat-banner { display: flex; gap: 10px; align-items: center; margin: 12px 0 0; }
+.bat-banner svg { width: 20px; height: 20px; flex: none; }
+.danger-link { display: inline-flex; align-items: center; gap: 6px; color: var(--danger); font-size: 13.5px; margin: 2px 4px 10px; }
+.danger-link svg { width: 15px; height: 15px; }
+#opt-info { width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); resize: vertical; font-size: 14.5px; }

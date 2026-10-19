@@ -83,6 +83,8 @@ const color = (s) => {
 };
 const filesOf = (pred) => S.files.filter(pred);
 const isDS = (e) => /^(DS|Examen|Partiel|Contr)/i.test(e.type || '');
+const building = (room) => { const m = /^L([A-Z])/i.exec(room || ''); return m ? m[1].toUpperCase() : null; };
+const otherBuilding = (e) => { const b = building(e.room); return b && b !== 'L' ? b : null; };
 const COURSE_TYPE = /^(CM|TD|TP|DS|Projet|Examen|Partiel|Contr)/i;
 function subjects() {
   const hidden = new Set(S.subjects.filter((s) => s.hidden).map((s) => s.name));
@@ -185,7 +187,7 @@ function eventCard(e, withDate) {
     <div class="bar" style="background:${color(e.subject)}"></div>
     <div class="body">
       <div class="title">${esc(e.subject)}</div>
-      <div class="meta">${live ? '<span class="live-dot">En cours</span>' : ''}${withDate ? `<span>${dFmt(e.start, { weekday: 'short', day: 'numeric', month: 'short' })}</span>` : ''}${e.type ? `<span>${esc(e.type)}</span>` : ''}${e.room ? `<span>${icon('pin')}${esc(e.room)}</span>` : ''}${e.teacher ? `<span>${icon('user')}${esc(e.teacher)}</span>` : ''}</div>
+      <div class="meta">${live ? '<span class="live-dot">En cours</span>' : ''}${withDate ? `<span>${dFmt(e.start, { weekday: 'short', day: 'numeric', month: 'short' })}</span>` : ''}${e.type ? `<span>${esc(e.type)}</span>` : ''}${e.room ? `<span class="${otherBuilding(e) ? 'bat' : ''}">${icon('pin')}${otherBuilding(e) ? 'Bât. ' + otherBuilding(e) + ' · ' : ''}${esc(e.room)}</span>` : ''}${e.teacher ? `<span>${icon('user')}${esc(e.teacher)}</span>` : ''}</div>
       ${chips.length ? `<div class="chips">${chips.join('')}</div>` : ''}
     </div>
   </a>`;
@@ -304,21 +306,29 @@ function vCours(uid) {
   const audio = fs.filter((f) => f.kind === 'audio' || f.kind === 'transcript');
   const docs = fs.filter((f) => f.kind === 'doc');
   const recs = recordingsOf(fs);
+  const opts = S.courseOpts?.[uid] || {};
   const hasTranscript = fs.some((f) => f.kind === 'transcript');
   coursRecs = Object.fromEntries(recs.map((r, i) => [`${uid}#${i}`, { ...r, label: recs.length > 1 ? `Enregistrement ${i + 1}` : 'Écouter le cours', sub: `${e.subject} · ${dayLabel(e.start)}` }]));
   return `<a class="back" href="javascript:history.back()">${icon('chevron-left')}Retour</a>
     <div class="head"><div><h1 style="font-size:26px">${esc(e.subject)}</h1>
       <div class="sub">${dayLabel(e.start)} · ${e.start.slice(11, 16)}–${(e.end || '').slice(11, 16)}${e.type ? ' · ' + esc(e.type) : ''}</div>
       <div class="sub">${[e.room, e.teacher].filter(Boolean).map(esc).join(' · ')}</div></div></div>
+    ${otherBuilding(e) ? `<div class="banner bat-banner">${icon('pin')}<div><b>Bâtiment ${otherBuilding(e)}</b> — salle ${esc(e.room)}, pas dans le bâtiment L habituel</div></div>` : ''}
     <div class="actions">
       <button class="card action rec" id="rec">${icon('mic')}Enregistrer</button>
       <button class="card action" id="add-doc">${icon('file-plus')}Document</button>
       <button class="card action" id="add-task">${icon('list-plus')}Devoir</button>
     </div>
     ${recs.length || hasTranscript ? `<div class="section-title">Le cours</div>
-      ${Object.entries(coursRecs).map(([k, r]) => playerHtml(k, r, r.label)).join('')}
+      ${Object.entries(coursRecs).map(([k, r]) => playerHtml(k, r, r.label) + `<button class="link danger-link" data-del-rec="${esc(k)}">${icon('trash')}Supprimer cet enregistrement</button>`).join('')}
       ${hasTranscript ? `<div class="list" style="margin-top:10px"><a class="row" href="#transcription/${encodeURIComponent(uid)}"><span class="lead">${icon('text')}</span><div class="grow"><div class="t">Lire la transcription</div><div class="s">Le cours en entier, en texte</div></div>${icon('chevron-right', 'chev')}</a></div>` : ''}` : ''}
-    ${(audio.length || docs.length) && !jobs.some((j) => JSON.parse(j.params || '{}').ready || j.status === 'running') ? `<div class="list" style="margin-top:10px"><button class="row" id="fiche-now"><span class="lead">${icon('sparkles')}</span><div class="grow"><div class="t">${fiches.length ? 'Refaire la fiche maintenant' : 'Faire la fiche maintenant'}</div><div class="s">Avec ${[recs.length && (recs.length > 1 ? recs.length + ' enregistrements' : 'l’enregistrement'), docs.length && docs.length + ' document(s)'].filter(Boolean).join(' et ') || 'ce qui est envoyé'}, sans attendre</div></div></button></div>` : ''}
+    <div class="section-title">Ce cours</div>
+    <div class="list">
+      <label class="row switch"><span class="lead">${icon('sparkles')}</span><div class="grow"><div class="t">Fiche de révision automatique</div><div class="s">${opts.fiche === false ? 'Désactivée : les DS, devoirs et infos sont quand même analysés' : 'Faite par ton PC après le cours'}</div></div><input type="checkbox" id="opt-fiche" ${opts.fiche === false ? '' : 'checked'}><i></i></label>
+    </div>
+    <label class="field" style="margin-top:10px"><span>Infos sur ce cours <small class="note">(annonces du prof, chapitre, matériel… : analysées comme la transcription)</small></span>
+      <textarea id="opt-info" rows="3" placeholder="Ex. DS le prochain cours sur les chapitres 2 et 3 · apporter la calculatrice">${esc(opts.info || '')}</textarea></label>
+    ${(audio.length || docs.length) && opts.fiche !== false && !jobs.some((j) => JSON.parse(j.params || '{}').ready || j.status === 'running') ? `<div class="list" style="margin-top:10px"><button class="row" id="fiche-now"><span class="lead">${icon('sparkles')}</span><div class="grow"><div class="t">${fiches.length ? 'Refaire la fiche maintenant' : 'Faire la fiche maintenant'}</div><div class="s">Avec ${[recs.length && (recs.length > 1 ? recs.length + ' enregistrements' : 'l’enregistrement'), docs.length && docs.length + ' document(s)'].filter(Boolean).join(' et ') || 'ce qui est envoyé'}, sans attendre</div></div></button></div>` : ''}
     <div class="list" style="margin-top:10px"><button class="row" data-ask="cours"><span class="lead">${icon('sparkles')}</span><div class="grow"><div class="t">Demander à Claude</div><div class="s">Explique-moi ce cours, fais-en une fiche…</div></div>${icon('chevron-right', 'chev')}</button>
       <button class="row" id="add-transcript"><span class="lead">${icon('text')}</span><div class="grow"><div class="t">Ajouter la transcription en texte</div><div class="s">Texte du cours tapé ou collé, à la place ou en plus de l’audio</div></div>${icon('chevron-right', 'chev')}</button></div>
     ${fiches.length || jobs.length ? `<div class="section-title">Fiche de révision</div><div class="list">${fiches.map((f) => `<a class="row" href="#fiche/${f.id}"><span class="lead">${icon('sparkles')}</span><div class="grow"><div class="t">${esc(f.name)}</div><div class="s">Prête · ${dFmt(f.created, { day: 'numeric', month: 'short' })}</div></div>${icon('chevron-right', 'chev')}</a>`).join('')}${jobRows(jobs)}</div>` : ''}
@@ -598,7 +608,7 @@ function vNotes() {
       </div>`).join('') + (r.other.length ? `<div class="section-title">Autres</div><div class="list">${r.other.map(noteRow).join('')}</div>` : '')
     : Object.entries((e.notes || []).reduce((m, n) => ((m[n.subject] ||= []).push(n), m), {})).map(([s, ns]) => `<div class="section-title"><span>${esc(s)}</span>${noteAvg(ns) != null ? pill(noteAvg(ns)) : ''}</div><div class="list">${ns.map(noteRow).join('')}</div>`).join('');
   return `<div class="head"><div><h1>Notes</h1><div class="sub">${e.at ? 'Mis à jour ' + ago(e.at) : 'Première synchronisation…'}</div></div>
-      <div style="display:flex;gap:8px"><button class="icon-btn" id="share-notes" aria-label="Partager mes notes">${icon('share')}</button><button class="icon-btn" id="e-sync" aria-label="Actualiser">${icon('refresh')}</button></div></div>
+      <div style="display:flex;gap:8px"><button class="icon-btn" id="add-note" aria-label="Ajouter une note">${icon('plus')}</button><button class="icon-btn" id="share-notes" aria-label="Partager mes notes">${icon('share')}</button><button class="icon-btn" id="e-sync" aria-label="Actualiser">${icon('refresh')}</button></div></div>
     ${e.error ? `<div class="banner">${esc(e.error)}</div>` : ''}
     ${general != null ? `<div class="card avg-card">
         <div class="avg-top"><div><span class="k">${icon('award')}Moyenne générale</span><div class="v">${fmt2(general)}<small> /20</small></div></div>
@@ -607,6 +617,28 @@ function vNotes() {
         <div class="s">${r ? `Modules pondérés par leurs crédits (${r.ects} ECTS évalués sur 30) ; un module se valide avec 10.` : 'Moyenne des matières.'} Touche la courbe pour voir chaque date.</div>
       </div>` : ''}
     ${body || `<div class="empty">${icon('award')}<div>Aucune note pour l’instant.</div></div>`}`;
+}
+
+// Note pas encore sur l'intranet : comptée tout de suite, remplacée toute seule quand la note officielle arrive
+function addNoteSheet() {
+  const subs = [...new Set([...S.events.filter((e) => COURSE_TYPE.test(e.type || '')).map((e) => e.subject), ...(S.ecam?.notes || []).map((n) => n.subject)])].sort();
+  openSheet(`<h2>${icon('award')} Ajouter une note</h2>
+    <p class="note" style="margin-top:-8px">Pour une note que tu connais avant l’intranet. Elle disparaîtra d’elle-même quand la note officielle sera publiée.</p>
+    <label class="field"><span>Matière</span><select id="an-sub">${subs.map((x) => `<option>${esc(x)}</option>`).join('')}</select></label>
+    <label class="field"><span>Épreuve</span><input id="an-exam" placeholder="Ex. DS 1, QCM, oral"></label>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <label class="field"><span>Note /20</span><input id="an-grade" inputmode="decimal" placeholder="13,19"></label>
+      <label class="field"><span>Date</span><input id="an-date" type="date" value="${todayStr()}"></label>
+      <label class="field"><span>Moyenne de la classe</span><input id="an-avg" inputmode="decimal" placeholder="facultatif"></label>
+      <label class="field"><span>Poids dans la matière</span><input id="an-w" placeholder="ex. 50 % (facultatif)"></label>
+    </div>
+    <button class="btn" id="an-save">Ajouter</button>`, (sh) => {
+    $('#an-save', sh).onclick = async () => {
+      const add = { subject: $('#an-sub', sh).value, exam: $('#an-exam', sh).value.trim() || 'Évaluation', grade: $('#an-grade', sh).value.trim(), date: $('#an-date', sh).value, average: $('#an-avg', sh).value.trim(), weight: $('#an-w', sh).value.trim() };
+      try { await api('/notes/perso', { method: 'POST', json: { add } }); } catch (e) { return toast(e.message); }
+      haptic('success'); closeSheet(); toast('Note ajoutée'); refresh();
+    };
+  });
 }
 
 // Lien public, en lecture seule, pour montrer ses notes (famille) : sans compte, révocable
@@ -637,6 +669,7 @@ function vNote(id) {
   const others = notes.filter((x) => x !== n);
   const subjWith = noteAvg(same), subjWithout = noteAvg(same.filter((x) => x !== n));
   const ef = S.ecam?.report?.effects?.[`${n.label}|${n.date}`];
+  const delBtn = n.perso ? `<button class="btn danger" id="del-note" style="margin-top:18px">${icon('trash')}Supprimer cette note ajoutée à la main</button>` : '';
   const ue = S.ecam?.report?.modules.find((u) => u.ecs.some((x) => x.notes.some((y) => y.label === n.label && y.date === n.date)));
   const [genWithout, genWith] = ef ? ef.general : [generalAvg(others), generalAvg(notes)];
   const bar = (v, label, c) => `<div class="cmp"><span>${label}</span><div class="track-bar"><i class="${c}" style="width:${Math.max(2, (v / max) * 100)}%"></i></div><b>${fmt2(v)}</b></div>`;
@@ -662,7 +695,7 @@ function vNote(id) {
     </div>
     ${!isNaN(g) ? `<div class="section-title">Effet de cette note</div><div class="list">${effect(subjWith, subjWithout, 'Moyenne de la matière')}${ef && ue ? effect(ef.ue[1], ef.ue[0], `Module ${ue.ue} (${ue.ects} ECTS)`) : ''}${effect(genWith, genWithout, 'Moyenne générale')}${subjWithout == null ? '<div class="row"><div class="grow"><div class="s">Première note de la matière.</div></div></div>' : ''}</div>` : ''}
     ${subjHist.length > 1 ? `<div class="section-title">Évolution en ${esc(n.subject)}</div><div class="card avg-card">${lineChart(subjHist, 'Évolution de la moyenne de la matière')}</div>` : ''}
-    ${same.length > 1 ? `<div class="section-title">Autres notes de la matière</div><div class="list">${same.filter((x) => x !== n).map((x) => `<a class="row" href="#note/${noteId(x)}"><span class="grade ${gradeClass(x.grade)}">${esc(x.grade.replace('/20', ''))}</span><div class="grow"><div class="t">${esc(x.exam || x.label)}</div><div class="s">${dFmt(x.date, { day: 'numeric', month: 'short' })}</div></div>${icon('chevron-right', 'chev')}</a>`).join('')}</div>` : ''}`;
+    ${same.length > 1 ? `<div class="section-title">Autres notes de la matière</div><div class="list">${same.filter((x) => x !== n).map((x) => `<a class="row" href="#note/${noteId(x)}"><span class="grade ${gradeClass(x.grade)}">${esc(x.grade.replace('/20', ''))}</span><div class="grow"><div class="t">${esc(x.exam || x.label)}</div><div class="s">${dFmt(x.date, { day: 'numeric', month: 'short' })}</div></div>${icon('chevron-right', 'chev')}</a>`).join('')}</div>` : ''}${delBtn}`;
 }
 
 // ---------- ECAM (soldes, liens, réglages) ----------
@@ -852,7 +885,7 @@ async function regenFiche(f) {
 async function vFiche(id) {
   const f = S.files.find((x) => x.id === id);
   view.innerHTML = `<a class="back" href="javascript:history.back()">${icon('chevron-left')}Retour</a>
-    <div class="head"><div><h1 style="font-size:24px">${esc(f?.name || 'Fiche')}</h1><div class="sub">${esc(f?.subject || '')}</div></div><div style="display:flex;gap:8px"><button class="icon-btn" id="regen" aria-label="Refaire cette fiche">${icon('refresh')}</button><button class="icon-btn" id="move" aria-label="Déplacer vers un autre cours">${icon('calendar')}</button><button class="icon-btn" id="print" aria-label="PDF / Imprimer">${icon('printer')}</button><button class="icon-btn" id="share" aria-label="Partager">${icon('share')}</button></div></div>
+    <div class="head"><div><h1 style="font-size:24px">${esc(f?.name || 'Fiche')}</h1><div class="sub">${esc(f?.subject || '')}</div></div><div style="display:flex;gap:8px"><button class="icon-btn" id="regen" aria-label="Refaire cette fiche">${icon('refresh')}</button><button class="icon-btn" id="del-fiche" aria-label="Supprimer cette fiche">${icon('trash')}</button><button class="icon-btn" id="move" aria-label="Déplacer vers un autre cours">${icon('calendar')}</button><button class="icon-btn" id="print" aria-label="PDF / Imprimer">${icon('printer')}</button><button class="icon-btn" id="share" aria-label="Partager">${icon('share')}</button></div></div>
     <div class="doc" id="doc"><div class="skeleton"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>`;
   const cached = store.get('fiche:' + id);
   let text = cached;
@@ -864,6 +897,11 @@ async function vFiche(id) {
   $('#doc').innerHTML = f?.kind === 'transcript' ? `<p style="white-space:pre-wrap">${esc(text)}</p>` : window.marked ? marked.parse(text) : `<pre>${esc(text)}</pre>`;
   $('#move').onclick = () => f && moveSheet(f);
   $('#regen').onclick = () => f && regenFiche(f);
+  $('#del-fiche').onclick = async () => {
+    if (!f || !confirm(`Supprimer « ${f.name} » ? C'est définitif.`)) return;
+    try { await api('/files/' + f.id, { method: 'DELETE' }); } catch (e) { return toast(e.message); }
+    toast('Fiche supprimée'); history.back(); refresh();
+  };
   $('#print').onclick = () => window.print(); // iOS : Imprimer → partager → enregistrer en PDF
   $('#share').onclick = async () => {
     const file = new File([text], (f?.name || 'fiche') + '.md', { type: 'text/markdown' });
@@ -1079,8 +1117,14 @@ async function vTranscript(uid) {
   const ts = [...recordingsOf(fs).flatMap((r) => r.transcripts), ...fs.filter((t) => t.kind === 'transcript' && !t.parent)];
   const e = findEvent(uid);
   view.innerHTML = `<a class="back" href="javascript:history.back()">${icon('chevron-left')}Retour</a>
-    <div class="head"><div><h1 style="font-size:24px">Transcription</h1><div class="sub">${esc(e?.subject || '')}${e ? ' · ' + dayLabel(e.start) : ''}</div></div></div>
+    <div class="head"><div><h1 style="font-size:24px">Transcription</h1><div class="sub">${esc(e?.subject || '')}${e ? ' · ' + dayLabel(e.start) : ''}</div></div>${ts.some((t) => !t.parent) ? `<button class="icon-btn" id="del-tr" aria-label="Supprimer le texte ajouté à la main">${icon('trash')}</button>` : ''}</div>
     <div class="doc" id="doc"><div class="skeleton"><i></i><i></i><i></i><i></i></div></div>`;
+  $('#del-tr')?.addEventListener('click', async () => {
+    const manual = ts.filter((t) => !t.parent);
+    if (!confirm(`Supprimer le texte ajouté à la main (${manual.length}) ? La transcription des enregistrements est gardée.`)) return;
+    try { for (const t of manual) await api('/files/' + t.id, { method: 'DELETE' }); } catch (er) { return toast(er.message); }
+    toast('Supprimé'); history.back(); refresh();
+  });
   try {
     const parts = await Promise.all(ts.map(async (t) => store.get('tr:' + t.id) || (await (await api('/files/' + t.id)).text())));
     ts.forEach((t, i) => store.set('tr:' + t.id, parts[i]));
@@ -1580,6 +1624,11 @@ function nativeReminders() {
     ...S.events.filter((e) => isDS(e) && !S.tasks.some((t) => t.event_uid === e.uid)).map((e) => ({ key: 'e-' + e.uid.replace(/\W+/g, ''), title: `DS — ${e.subject}`, due: e.start, place: e.room, url: '/#cours/' + encodeURIComponent(e.uid) })),
   ];
   const out = [];
+  const soon = addDays(todayStr(), 14);
+  for (const e of S.events.filter((x) => otherBuilding(x) && x.start > nowStr() && x.start.slice(0, 10) <= soon)) {
+    out.push({ id: 'bat-' + e.uid.replace(/\W+/g, ''), at: shiftMin(e.start, -20), important: true, url: '/#cours/' + encodeURIComponent(e.uid),
+      title: `Bâtiment ${otherBuilding(e)} — ${e.subject}`, body: `Cours à ${e.start.slice(11, 16)} en salle ${e.room} : pas dans le bâtiment L.` });
+  }
   for (const it of items) for (const [n, label, hour] of [[3, 'Dans 3 jours', '18:00'], [1, 'Demain', '18:00'], [0, "Aujourd'hui", '07:00']]) {
     const time = it.due.slice(11, 16);
     out.push({ id: `${it.key}-${n}`, at: addDays(it.due, -n) + 'T' + hour, url: it.url, title: `${label} · ${it.title}`, body: [it.sub, time !== '00:00' ? time : '', it.place].filter(Boolean).join(' · ') + (it.note ? '\n' + it.note : '') });
@@ -1839,12 +1888,31 @@ function bind(route, arg) {
   const ev = route === 'cours' && findEvent(arg);
   on('rec', () => (NATIVE ? recordNative(ev) : store.get('recReady') ? record(ev) : recGuide(ev)));
   on('rec-guide', () => recGuide());
+  // options du cours : enregistrées sur le serveur (le PC et Claude s'en servent)
+  const saveOpts = async (o) => { try { const r = await api('/courses/opts', { method: 'POST', json: { uid: ev.uid, ...o } }); (S.courseOpts ||= {})[ev.uid] = r.opts; } catch (e) { toast(e.message); } };
+  on('opt-fiche', async () => { const on = $('#opt-fiche', view).checked; await saveOpts({ fiche: on }); toast(on ? 'Fiche de révision réactivée pour ce cours' : 'Pas de fiche pour ce cours : seuls les DS, devoirs et infos seront analysés', 3500); render(false); });
+  const info = $('#opt-info', view);
+  if (info) { let t; info.oninput = () => { clearTimeout(t); t = setTimeout(() => saveOpts({ info: info.value.trim() }), 900); }; info.onblur = () => { clearTimeout(t); saveOpts({ info: info.value.trim() }); }; }
+  view.querySelectorAll('[data-del-rec]').forEach((b) => (b.onclick = async () => {
+    const rec = coursRecs[b.dataset.delRec];
+    if (!rec || !confirm(`Supprimer cet enregistrement (${size(rec.size)}) et sa transcription ? C'est définitif.`)) return;
+    try { for (const f of [...rec.parts, ...rec.transcripts]) await api('/files/' + f.id, { method: 'DELETE' }); } catch (e) { return toast(e.message); }
+    if (PL.key === b.dataset.delRec) { PL.audio.pause(); PL.key = null; miniPlayer(); }
+    toast('Enregistrement supprimé'); refresh();
+  }));
   on('fiche-now', async () => {
     try { await api('/courses/fiche', { method: 'POST', json: { uid: ev.uid } }); toast('C’est parti : la fiche se fait dès que ton PC est allumé'); refresh(); }
     catch (e) { toast(e.message); }
   });
   on('add-transcript', () => transcriptSheet(ev));
   on('share-notes', () => shareNotesSheet());
+  on('add-note', () => addNoteSheet());
+  on('del-note', async () => {
+    const n = (S.ecam?.notes || []).find((x) => noteId(x) === encodeURIComponent(arg));
+    if (!n?.perso || !confirm('Supprimer cette note ajoutée à la main ?')) return;
+    try { await api('/notes/perso', { method: 'POST', json: { remove: n.perso } }); } catch (e) { return toast(e.message); }
+    toast('Note supprimée'); location.hash = '#notes'; refresh();
+  });
   on('file-shared', () => checkShared(true));
   on('retry-pending', async () => { await syncPending(); toast(nativePending.length ? 'Envoi relancé' : 'Tout est envoyé'); });
   on('add-doc', () => pickDocs(ev ? { subject: ev.subject, uid: ev.uid } : { subject: arg }));
