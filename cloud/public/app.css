@@ -577,3 +577,4 @@ body.offline::before {
 .danger-link { display: inline-flex; align-items: center; gap: 6px; color: var(--danger); font-size: 13.5px; margin: 2px 4px 10px; }
 .danger-link svg { width: 15px; height: 15px; }
 #opt-info { width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); resize: vertical; font-size: 14.5px; }
+.row.switch .t, .row.switch .s { white-space: normal; }
