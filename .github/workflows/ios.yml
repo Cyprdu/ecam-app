@@ -5,6 +5,8 @@ on:
   workflow_dispatch:
   push:
     paths: ['ios/**']
+permissions:
+  contents: write   # pour publier l'IPA dans la version « latest »
 jobs:
   build:
     runs-on: macos-15
@@ -28,3 +30,12 @@ jobs:
         with:
           name: ECAM-ipa
           path: ios/ECAM.ipa
+      # Lien fixe vers la dernière version, téléchargeable depuis l'iPhone sans compte GitHub :
+      # https://github.com/Cyprdu/ecam-app/releases/latest/download/ECAM.ipa
+      - name: Publier la dernière version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view latest >/dev/null 2>&1 || gh release create latest --title "App iPhone ECAM" --notes "Dernière version de l'app iPhone (à installer avec SideStore)." --latest
+          gh release upload latest ios/ECAM.ipa --clobber
+          gh release edit latest --notes "Dernière version de l'app iPhone, compilée le $(date -u '+%d/%m/%Y à %H:%M') UTC (commit ${GITHUB_SHA::7}). À installer avec SideStore." --latest
