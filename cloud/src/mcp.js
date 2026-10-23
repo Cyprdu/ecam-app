@@ -96,6 +96,8 @@ export function tools(ctx) {
         if (!s) return 'Matière inconnue. Utilise lister_matieres.';
         const { results } = await DB.prepare("SELECT f.id, f.kind, f.name, f.mime, f.event_uid, (SELECT id FROM files t WHERE t.parent = f.id AND t.kind = 'text' AND t.name = ?) AS digest_id, (SELECT id FROM files t WHERE t.parent = f.id AND t.kind = 'text' AND t.name != ?) AS text_id FROM files f WHERE f.subject = ? AND f.kind IN ('fiche', 'transcript', 'doc') ORDER BY COALESCE(f.event_uid, ''), f.name").bind(RESUME, RESUME, s).all();
         const inSession = (f) => !seance || (f.event_uid || '').startsWith(seance);
+        const optsAll = JSON.parse((await DB.prepare("SELECT value FROM kv WHERE key='course_opts'").first())?.value || '{}');
+        const missed = Object.entries(optsAll).filter(([u, o]) => o.absent && u.endsWith('|' + s) && (!seance || u.startsWith(seance))).map(([u]) => session(u));
         const read = async (id) => (id ? (await (await env.FILES.get(id))?.text()) || '' : '');
         // fiches des cours d'abord (elles couvrent leur transcription), puis les autres documents
         const courseFiches = results.filter((f) => f.kind === 'fiche' && f.event_uid && inSession(f));
@@ -111,7 +113,8 @@ export function tools(ctx) {
           const text = seance || !f.digest_id ? (await read(own)).slice(0, seance ? 90000 : 6000) : await read(f.digest_id);
           add(`${f.kind === 'transcript' ? 'Transcription' : 'Document'} ${f.name}${f.event_uid ? ' (séance ' + session(f.event_uid) + ')' : ''}${!seance && f.digest_id ? ' — résumé' : ''} [id=${f.id}]`, text);
         }
-        return out.length ? `Matière : ${s}${seance ? ' — séance du ' + seance : ''}\n\n` + out.join('\n\n') + (left < 500 ? '\n\n[Limite atteinte : le reste est accessible avec lire_document]' : '') : `Aucun contenu lisible pour ${s}${seance ? ' le ' + seance : ''}.`;
+        const absNote = missed.length ? `ABSENCES de l'étudiant : ${missed.join(', ')} — ces séances sont à rattraper : explique leurs notions depuis le début.\n\n` : '';
+        return out.length ? `Matière : ${s}${seance ? ' — séance du ' + seance : ''}\n\n` + absNote + out.join('\n\n') + (left < 500 ? '\n\n[Limite atteinte : le reste est accessible avec lire_document]' : '') : `Aucun contenu lisible pour ${s}${seance ? ' le ' + seance : ''}.`;
       },
     },
     {
@@ -160,7 +163,7 @@ export function tools(ctx) {
           const { results: ts } = await DB.prepare('SELECT title, due, done, kind FROM tasks WHERE event_uid=? OR (subject=? AND substr(due, 1, 10) >= ?) ORDER BY due LIMIT 8').bind(e.uid, s, date).all();
           const o = opts[e.uid] || {};
           out.push(`${e.subject} — ${e.start.replace('T', ' ')} à ${(e.end || '').slice(11)} · ${e.type || ''} · salle ${e.room || '?'} · ${e.teacher || ''}
-Fiche automatique : ${o.fiche === false ? 'désactivée' : 'activée'}${o.info ? '\nInfos ajoutées par l’étudiant : ' + o.info : ''}
+${o.absent ? 'ÉTUDIANT ABSENT à ce cours : il doit le rattraper (explique tout depuis le début, ne suppose rien de connu)\n' : ''}Fiche automatique : ${o.fiche === false ? 'désactivée' : 'activée'}${o.info ? '\nInfos ajoutées par l’étudiant : ' + o.info : ''}
 Fichiers : ${fs.map((f) => `${f.kind} « ${f.name} » (id=${f.id})`).join(' ; ') || 'aucun'}
 Devoirs et DS liés ou à venir : ${ts.map((t) => `${t.due.slice(0, 10)} ${t.kind} « ${t.title} »${t.done ? ' (fait)' : ''}`).join(' ; ') || 'aucun'}`);
         }
@@ -170,8 +173,8 @@ Devoirs et DS liés ou à venir : ${ts.map((t) => `${t.due.slice(0, 10)} ${t.kin
     {
       name: 'infos_cours',
       description: "Ajoute des informations à une séance (ce que le prof a annoncé, matériel à prévoir, chapitre traité…) et/ou active ou désactive la fiche de révision automatique de cette séance. Les infos servent ensuite aux fiches et à Claude.",
-      inputSchema: { type: 'object', properties: { matiere: { type: 'string' }, date: { type: 'string', description: 'AAAA-MM-JJ' }, info: { type: 'string', description: 'texte ajouté aux infos existantes' }, fiche_auto: { type: 'boolean' } }, required: ['matiere', 'date'] },
-      async run({ matiere, date, info, fiche_auto }) {
+      inputSchema: { type: 'object', properties: { matiere: { type: 'string' }, date: { type: 'string', description: 'AAAA-MM-JJ' }, info: { type: 'string', description: 'texte ajouté aux infos existantes' }, fiche_auto: { type: 'boolean' }, absent: { type: 'boolean', description: 'l’étudiant était (ou sera) absent à ce cours' } }, required: ['matiere', 'date'] },
+      async run({ matiere, date, info, fiche_auto, absent }) {
         const s = await findSubject(matiere);
         const e = (await ctx.allEvents(env)).find((x) => x.subject === s && x.start.startsWith(date));
         if (!e) return `Pas de cours de ${s || matiere} le ${date}.`;
@@ -179,6 +182,7 @@ Devoirs et DS liés ou à venir : ${ts.map((t) => `${t.due.slice(0, 10)} ${t.kin
         const o = (all[e.uid] ||= {});
         if (info) o.info = [o.info, info].filter(Boolean).join('\n');
         if (typeof fiche_auto === 'boolean') o.fiche = fiche_auto;
+        if (typeof absent === 'boolean') o.absent = absent;
         o.at = new Date().toISOString();
         await DB.prepare("INSERT OR REPLACE INTO kv VALUES ('course_opts', ?)").bind(JSON.stringify(all)).run();
         return `Cours de ${s} du ${e.start.replace('T', ' ')} : ${info ? 'infos ajoutées' : ''}${info && typeof fiche_auto === 'boolean' ? ', ' : ''}${typeof fiche_auto === 'boolean' ? 'fiche automatique ' + (fiche_auto ? 'activée' : 'désactivée') : ''}.`;

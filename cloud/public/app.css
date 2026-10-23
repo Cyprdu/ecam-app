@@ -1,33 +1,51 @@
-/* ECAM — « papier & encre » : neutres pierre, encre noire, un seul signal orange. */
+/* ECAM — charte graphique
+   Neutres légèrement froids (lisibles, sobres), un orange de marque réservé à l'action et au « maintenant »,
+   des couleurs d'état fixes (vert = acquis / au-dessus, orange foncé = attention, rouge = danger, bleu = en cours).
+   Thèmes : clair, sombre, ou automatique (système) — choix dans Réglages (attribut data-theme sur <html>). */
 :root {
-  --bg: #f4f3f1;
-  --card: #ffffff;
-  --text: #161412;
-  --ink: #161412;            /* boutons principaux */
+  --bg: #f5f6f8;             /* fond de l'app */
+  --card: #ffffff;           /* surfaces */
+  --raised: #ffffff;         /* feuilles, menus */
+  --text: #12151a;
+  --ink: #12151a;            /* boutons principaux */
   --on-ink: #ffffff;
-  --muted: #7a746d;
-  --line: #e6e3df;
-  --fill: #eeece9;
-  --accent: #f0580f;         /* signal : aujourd'hui, en cours, enregistrer, liens */
-  --accent-soft: #fdebe1;
-  --danger: #d93a2b;
-  --ok: #1e8a5a;
-  --ok-soft: #e2f3ea;
-  --warn: #c2620a;
-  --warn-soft: #fbeedd;
-  --radius: 18px;
+  --muted: #646b76;
+  --subtle: #8a919c;
+  --line: #e3e6eb;
+  --fill: #eef0f3;
+  --accent: #e8590c;         /* marque : enregistrer, aujourd'hui, liens */
+  --accent-soft: #fdeee4;
+  --danger: #d92d20;
+  --ok: #15803d;
+  --ok-soft: #e5f4ea;
+  --warn: #b54708;
+  --warn-soft: #fdf0e1;
+  --info: #2459c7;
+  --info-soft: #e8effc;
+  --shadow: 0 1px 2px rgba(16, 24, 40, .05), 0 1px 3px rgba(16, 24, 40, .04);
+  --shadow-lg: 0 12px 32px -8px rgba(16, 24, 40, .18);
+  --radius: 16px;
+  --radius-sm: 12px;
   --ease: cubic-bezier(.2, .8, .2, 1);
   --top: env(safe-area-inset-top, 0px);
   --bottom: env(safe-area-inset-bottom, 0px);
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0e0d0c; --card: #181716; --text: #f6f4f1; --ink: #f6f4f1; --on-ink: #121110;
-    --muted: #a19a92; --line: #2a2725; --fill: #211f1d;
-    --accent: #ff6a24; --accent-soft: #3a1d0e; --danger: #ff6b5b;
-    --ok: #4fca8d; --ok-soft: #12291d; --warn: #f5a14a; --warn-soft: #33220f; color-scheme: dark;
+  :root:not([data-theme="light"]) {
+    --bg: #0c0d0f; --card: #15171a; --raised: #1c1e22; --text: #f1f2f4; --ink: #f1f2f4; --on-ink: #101113;
+    --muted: #9ba1ab; --subtle: #767c86; --line: #262930; --fill: #1d2025;
+    --accent: #ff7a33; --accent-soft: #3a2012; --danger: #ff6b5e;
+    --ok: #4ccb87; --ok-soft: #10281b; --warn: #f5a35c; --warn-soft: #33220f; --info: #8db4ff; --info-soft: #17233c;
+    --shadow: 0 0 0 1px rgba(255, 255, 255, .02); --shadow-lg: 0 16px 40px -10px rgba(0, 0, 0, .6); color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #0c0d0f; --card: #15171a; --raised: #1c1e22; --text: #f1f2f4; --ink: #f1f2f4; --on-ink: #101113;
+  --muted: #9ba1ab; --subtle: #767c86; --line: #262930; --fill: #1d2025;
+  --accent: #ff7a33; --accent-soft: #3a2012; --danger: #ff6b5e;
+  --ok: #4ccb87; --ok-soft: #10281b; --warn: #f5a35c; --warn-soft: #33220f; --info: #8db4ff; --info-soft: #17233c;
+  --shadow: 0 0 0 1px rgba(255, 255, 255, .02); --shadow-lg: 0 16px 40px -10px rgba(0, 0, 0, .6); color-scheme: dark;
 }
 
 /* ---------- Base : comportement d'app ---------- */
@@ -578,3 +596,88 @@ body.offline::before {
 .danger-link svg { width: 15px; height: 15px; }
 #opt-info { width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); resize: vertical; font-size: 14.5px; }
 .row.switch .t, .row.switch .s { white-space: normal; }
+
+/* ==========================================================================
+   Charte : composants (couche finale, s'applique à toute l'app)
+   ========================================================================== */
+body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, sans-serif; font-size: 15.5px; letter-spacing: -.003em; }
+::selection { background: var(--accent-soft); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+
+/* En-têtes */
+.head { margin: 8px 0 20px; }
+.head h1 { font-size: 30px; font-weight: 720; letter-spacing: -.03em; }
+.head .sub { font-size: 14px; color: var(--muted); }
+.section-title { font-size: 12px; font-weight: 650; letter-spacing: .07em; color: var(--subtle); margin: 30px 2px 10px; }
+.back { font-weight: 550; }
+
+/* Surfaces : bord fin + ombre très légère en clair, surfaces étagées en sombre */
+.card, .list, .doc { border-color: var(--line); box-shadow: var(--shadow); }
+.list { border-radius: var(--radius); }
+.row { padding: 13px 16px; min-height: 52px; }
+.row + .row::before { left: 52px; border-color: var(--line); }
+.row .t { font-weight: 560; }
+.row .s { font-size: 13.5px; color: var(--muted); }
+.row .lead { color: var(--muted); opacity: 1; }
+.row .lead svg { width: 19px; height: 19px; }
+.icon-btn { box-shadow: var(--shadow); }
+
+/* Interrupteurs : seuls (carte) ou dans une liste (ligne) — corrige la double bordure sous l'interrupteur */
+.list > .switch, .list > label.row.switch { margin: 0; border: 0; border-radius: 0; background: none; box-shadow: none; padding: 13px 16px; }
+.list > .switch + .switch::before { content: ""; position: absolute; top: 0; left: 52px; right: 0; border-top: 1px solid var(--line); }
+.switch { position: relative; }
+.switch i { background: var(--fill); box-shadow: inset 0 0 0 1px var(--line); }
+.switch input:checked + i { box-shadow: none; }
+
+/* Boutons */
+.btn { border-radius: var(--radius-sm); padding: 13px 16px; font-weight: 620; }
+.btn.secondary { background: var(--card); box-shadow: var(--shadow); }
+.btn.danger { border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--line)); }
+.action { border-radius: var(--radius); box-shadow: var(--shadow); }
+.action.rec { box-shadow: 0 6px 16px -6px color-mix(in srgb, var(--accent) 70%, transparent); }
+
+/* Champs */
+.field span { font-size: 12.5px; color: var(--muted); font-weight: 600; }
+.field input, .field select, .field textarea, #opt-info { border-radius: var(--radius-sm); border-color: var(--line); background: var(--card); }
+.field textarea, #opt-info { line-height: 1.45; }
+
+/* Puces, bandeaux */
+.chip { font-weight: 620; }
+.chip.info { background: var(--info-soft); color: var(--info); }
+.banner { border: 1px solid color-mix(in srgb, var(--warn) 22%, transparent); }
+
+/* Feuilles (modales) */
+.sheet { background: var(--raised); box-shadow: var(--shadow-lg); }
+.sheet-backdrop { background: rgba(8, 10, 14, .42); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); }
+.sheet h2 { font-size: 20px; font-weight: 700; }
+
+/* Barre d'onglets */
+.tabbar { border-color: var(--line); }
+.tabbar a { font-weight: 600; }
+@media (min-width: 1024px) { .tabbar a.on { background: var(--card); box-shadow: var(--shadow), inset 0 0 0 1px var(--line); } }
+
+/* Cartes de cours */
+.event { border-radius: var(--radius); }
+.event .bar { width: 4px; }
+.event.live { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent), var(--shadow); }
+
+/* Lecteur, fiche, notes : alignés sur la charte */
+.player { box-shadow: var(--shadow); }
+.doc { border-radius: var(--radius); }
+.grade { border-radius: 10px; font-weight: 680; }
+.mod-avg span.run { background: var(--info-soft); color: var(--info); }
+
+/* Choix du thème (Réglages) */
+.theme-pick { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.theme-pick button { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 8px; border-radius: var(--radius); background: var(--card); border: 1px solid var(--line); font-size: 13.5px; font-weight: 600; color: var(--muted); box-shadow: var(--shadow); }
+.theme-pick button.on { border-color: var(--accent); color: var(--text); box-shadow: 0 0 0 3px var(--accent-soft); }
+.theme-pick .sw { width: 100%; height: 46px; border-radius: 10px; border: 1px solid var(--line); overflow: hidden; display: grid; grid-template-columns: 1fr 1fr; }
+.theme-pick .sw i:first-child { background: #f5f6f8; } .theme-pick .sw i:last-child { background: #0c0d0f; }
+.theme-pick .sw.light i { background: #f5f6f8 !important; } .theme-pick .sw.dark i { background: #0c0d0f !important; }
+
+/* Réveil du jour (agenda) */
+.alarm-line { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 14px; margin-bottom: 10px; border-radius: var(--radius-sm); background: var(--info-soft); color: var(--info); font-weight: 600; font-size: 14px; text-align: left; }
+.alarm-line svg { width: 18px; height: 18px; }
+.alarm-line span { flex: 1; }
+.alarm-line small { font-size: 12.5px; font-weight: 650; opacity: .85; }
+.alarm-line.off { background: var(--fill); color: var(--muted); }

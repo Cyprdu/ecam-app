@@ -576,9 +576,15 @@ def readable_files_of(p: Path):
 SYSTEM = "Assistant de revision d'un etudiant ingenieur (ECAM Lyon). Reponds en francais, avec rigueur, sans rien inventer."  # sans accents : passe par la ligne de commande Windows
 
 
+CLAUDE_PAUSE = 0  # heure jusqu'à laquelle on n'appelle plus Claude (après un échec de démarrage)
+
+
 def claude(prompt, cwd: Path, model="sonnet", images=()):
     """Un seul échange avec Claude, sans le contexte de Claude Code (≈ 3 000 tokens fixes au lieu de ≈ 40 000) :
     les sources sont collées dans le message, les images (JPEG) jointes au même message."""
+    global CLAUDE_PAUSE
+    if time.time() < CLAUDE_PAUSE:  # Claude Code cassé (mise à jour ratée…) : on ne relance pas, Windows afficherait une erreur à chaque fois
+        raise RuntimeError("Claude Code indisponible, nouvel essai plus tard")
     cmd = ["claude", "-p", "--model", model, "--system-prompt", SYSTEM, "--strict-mcp-config", "--no-session-persistence", "--tools", ""]
     if images:
         import base64
@@ -594,7 +600,11 @@ def claude(prompt, cwd: Path, model="sonnet", images=()):
         res = [json.loads(line) for line in out.splitlines() if line.startswith("{") and '"type":"result"' in line]
         out = res[-1].get("result", "") if res and not res[-1].get("is_error") else ""
     if r.returncode != 0 or not out.strip():
-        raise RuntimeError((r.stderr or r.stdout or "Claude n'a rien renvoyé")[-500:])
+        err = (r.stderr or r.stdout or "Claude n'a rien renvoyé")[-500:]
+        if "native binary" in err or r.returncode in (1, 216, 193) and not out.strip() and not r.stdout.strip():
+            CLAUDE_PAUSE = time.time() + 1800
+            log("Claude Code ne démarre pas (installation abîmée ?) : pause de 30 min —", err.strip().splitlines()[0] if err.strip() else r.returncode)
+        raise RuntimeError(err)
     note_usage(model, len(prompt) + 4800 * len(images), len(out), re.sub(r"\s+", " ", STATUS["now"])[:90])
     return out.strip()
 
@@ -725,6 +735,9 @@ def fiche_ds(subject, state):
     head = DS_PROMPT.format(subject=subject, notions_part=NOTION_PART.format(liste=notion_list(notions)) if notions else "## Notions\nUne section par notion du cours, avec méthode, exemple corrigé, schémas clés et pièges.")
     if texte:
         head += f"\n\nPÉRIMÈTRE ANNONCÉ : {texte}"
+    missed = sorted(u[:10] for u, o in (state.get("courseOpts") or {}).items() if o.get("absent") and u.endswith("|" + subject))
+    if missed:
+        head += f"\n\nL'ÉTUDIANT ÉTAIT ABSENT aux séances du {', '.join(missed)} : pour les notions vues ces jours-là, explique tout depuis le début (il ne les a pas entendues), avec un exemple de plus."
     sources = bundle(subject_sources(subject, days), 220000)
     md = claude(f"{head}\n{SCHEMA_RULE}\n{OUTPUT_RULE}\n\nSOURCES :\n{sources}", HERE)
     # Vérification : chaque notion a sa section ; sinon un complément, seulement pour celles qui manquent
@@ -1029,7 +1042,11 @@ def run_job(job, state):
             log("fiche désactivée pour ce cours :", subject, "— transcription et analyse seulement")
             return None
         log("génération de la fiche avec Claude…")
-        md = fiche_cours(subject, folder, course_files(job, state), opts.get("info", ""))
+        info = opts.get("info", "")
+        if opts.get("absent"):
+            info = ("L'ÉTUDIANT ÉTAIT ABSENT à ce cours : la fiche doit lui permettre de le rattraper seul, "
+                    "en expliquant chaque notion depuis le début, avec exemples.\n" + info).strip()
+        md = fiche_cours(subject, folder, course_files(job, state), info)
         path = folder / "Fiche de révision.md"
         path.write_text(md, encoding="utf-8")
         return md, "Fiche du cours", path

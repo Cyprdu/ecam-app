@@ -174,6 +174,7 @@ function eventCard(e, withDate) {
   const tasks = S.tasks.filter((t) => t.event_uid === e.uid && !t.done);
   const chips = [];
   if (isDS(e)) chips.push(`<span class="chip warn">${icon('target')}DS</span>`);
+  if (S.courseOpts?.[e.uid]?.absent) chips.push(`<span class="chip">${icon('user')}Absent</span>`);
   if (fs.some((f) => f.kind === 'fiche')) chips.push(`<span class="chip ok">${icon('sparkles')}Fiche</span>`);
   else if (jobs.length) chips.push(`<span class="chip ${jobState(jobs[0])[1]}">${icon(jobState(jobs[0])[2])}${jobState(jobs[0])[0]}</span>`);
   if (fs.some((f) => f.kind === 'audio') && !jobs.length) chips.push(`<span class="chip">${icon('mic')}Audio</span>`);
@@ -242,8 +243,9 @@ function dayPane(day) {
   const dayItems = upcoming(3650).filter((r) => r.due.startsWith(day) && !(!r.isTask && shown.has(r.event_uid))); // un DS du calendrier a déjà sa carte
   const items = dayItems.length ? `<div class="section-title">Ce jour-là</div><div class="list">${dayItems.map(reminderRow).join('')}</div>` : '';
   const vac = !evs.length && vacationOf(day);
+  const alarm = alarmLine(day);
   if (vac) return `<div class="empty vacation"><div class="vac-sun">${icon('sun')}</div><b>${vac[2]}</b><div class="note">Du ${longDay(vac[0])} au ${longDay(vac[1])}<br>Reprise le ${longDay(addDays(vac[1], 1))}</div></div>${items}`;
-  return `${evs.length ? evs.map((e) => eventCard(e)).join('') : `<div class="empty">${icon('calendar')}<div>Aucun cours ce jour-là${day < (S.events[0]?.start || '') ? '<br><span class="note">Le calendrier ECAM ne contient pas les cours d’avant le ' + dFmt(S.events[0].start, { day: 'numeric', month: 'long' }) + '.</span>' : ''}</div></div>`}
+  return `${alarm}${evs.length ? evs.map((e) => eventCard(e)).join('') : `<div class="empty">${icon('calendar')}<div>Aucun cours ce jour-là${day < (S.events[0]?.start || '') ? '<br><span class="note">Le calendrier ECAM ne contient pas les cours d’avant le ' + dFmt(S.events[0].start, { day: 'numeric', month: 'long' }) + '.</span>' : ''}</div></div>`}
     ${items}`;
 }
 const panes = () => [-1, 0, 1].map((n) => `<div class="pane">${dayPane(addDays(selDay, n))}</div>`).join('');
@@ -322,12 +324,6 @@ function vCours(uid) {
     ${recs.length || hasTranscript ? `<div class="section-title">Le cours</div>
       ${Object.entries(coursRecs).map(([k, r]) => playerHtml(k, r, r.label) + `<button class="link danger-link" data-del-rec="${esc(k)}">${icon('trash')}Supprimer cet enregistrement</button>`).join('')}
       ${hasTranscript ? `<div class="list" style="margin-top:10px"><a class="row" href="#transcription/${encodeURIComponent(uid)}"><span class="lead">${icon('text')}</span><div class="grow"><div class="t">Lire la transcription</div><div class="s">Le cours en entier, en texte</div></div>${icon('chevron-right', 'chev')}</a></div>` : ''}` : ''}
-    <div class="section-title">Ce cours</div>
-    <div class="list">
-      <label class="row switch"><span class="lead">${icon('sparkles')}</span><div class="grow"><div class="t">Fiche de révision automatique</div><div class="s">${opts.fiche === false ? 'Désactivée : les DS, devoirs et infos sont quand même analysés' : 'Faite par ton PC après le cours'}</div></div><input type="checkbox" id="opt-fiche" ${opts.fiche === false ? '' : 'checked'}><i></i></label>
-    </div>
-    <label class="field" style="margin-top:10px"><span>Infos sur ce cours <small class="note">(annonces du prof, chapitre, matériel… : analysées comme la transcription)</small></span>
-      <textarea id="opt-info" rows="3" placeholder="Ex. DS le prochain cours sur les chapitres 2 et 3 · apporter la calculatrice">${esc(opts.info || '')}</textarea></label>
     ${(audio.length || docs.length) && opts.fiche !== false && !jobs.some((j) => JSON.parse(j.params || '{}').ready || j.status === 'running') ? `<div class="list" style="margin-top:10px"><button class="row" id="fiche-now"><span class="lead">${icon('sparkles')}</span><div class="grow"><div class="t">${fiches.length ? 'Refaire la fiche maintenant' : 'Faire la fiche maintenant'}</div><div class="s">Avec ${[recs.length && (recs.length > 1 ? recs.length + ' enregistrements' : 'l’enregistrement'), docs.length && docs.length + ' document(s)'].filter(Boolean).join(' et ') || 'ce qui est envoyé'}, sans attendre</div></div></button></div>` : ''}
     <div class="list" style="margin-top:10px"><button class="row" data-ask="cours"><span class="lead">${icon('sparkles')}</span><div class="grow"><div class="t">Demander à Claude</div><div class="s">Explique-moi ce cours, fais-en une fiche…</div></div>${icon('chevron-right', 'chev')}</button>
       <button class="row" id="add-transcript"><span class="lead">${icon('text')}</span><div class="grow"><div class="t">Ajouter la transcription en texte</div><div class="s">Texte du cours tapé ou collé, à la place ou en plus de l’audio</div></div>${icon('chevron-right', 'chev')}</button></div>
@@ -336,6 +332,14 @@ function vCours(uid) {
     <div class="section-title">Documents</div>
     ${docs.length ? `<div class="list">${fileRows(docs.map((f) => ({ ...f, name: f.name.slice(f.name.lastIndexOf('/') + 1) })))}</div>` : `<p class="note">Aucun document pour ce cours. Ajoute les supports du prof : ils serviront pour les fiches.</p>`}
     <div class="list" style="margin-top:10px"><a class="row" href="#matiere/${encodeURIComponent(e.subject)}"><span class="lead">${icon('book')}</span><div class="grow"><div class="t">Tous les documents de la matière</div><div class="s">${docCount(e.subject)} documents et fiches</div></div>${icon('chevron-right', 'chev')}</a></div>
+    
+    <div class="section-title">Réglages du cours</div>
+    <div class="list">
+      <label class="row switch"><span class="lead">${icon('sparkles')}</span><div class="grow"><div class="t">Fiche de révision automatique</div><div class="s">${opts.fiche === false ? 'Désactivée : les DS, devoirs et infos sont quand même analysés' : 'Faite par ton PC après le cours'}</div></div><input type="checkbox" id="opt-fiche" ${opts.fiche === false ? '' : 'checked'}><i></i></label>
+      <label class="row switch"><span class="lead">${icon('user')}</span><div class="grow"><div class="t">J’étais absent</div><div class="s">${opts.absent ? 'Rattrapage ajouté à tes devoirs ; Claude et tes fiches en tiennent compte' : 'Claude et la prépa DS expliqueront ce cours depuis le début'}</div></div><input type="checkbox" id="opt-absent" ${opts.absent ? 'checked' : ''}><i></i></label>
+    </div>
+    <label class="field" style="margin-top:10px"><span>Infos sur ce cours <small class="note">(annonces du prof, chapitre, matériel… : analysées comme la transcription)</small></span>
+      <textarea id="opt-info" rows="3" placeholder="Ex. DS le prochain cours sur les chapitres 2 et 3 · apporter la calculatrice">${esc(opts.info || '')}</textarea></label>
     `;
 }
 
@@ -468,6 +472,9 @@ function vReglages() {
   const hidden = S.subjects.filter((s) => s.hidden);
   return `<a class="back" href="#ecam">${icon('chevron-left')}ECAM</a><div class="head"><div><h1>Réglages</h1></div></div>
     ${!standalone && /iPhone|iPad/.test(navigator.userAgent) ? `<div class="card" style="padding:14px;margin-bottom:8px"><b>Installer l'app</b><p class="note" style="margin:6px 0 0">Dans Safari : bouton Partager, puis « Sur l'écran d'accueil ». Les notifications ne marchent qu'une fois l'app installée.</p></div>` : ''}
+    ${alarmSection()}
+    <div class="section-title">Apparence</div>
+    <div class="theme-pick">${[['auto', 'Automatique', ''], ['light', 'Clair', 'light'], ['dark', 'Sombre', 'dark']].map(([k, l, c]) => `<button data-theme-set="${k}" class="${(store.get('theme') || 'auto') === k ? 'on' : ''}"><span class="sw ${c}"><i></i><i></i></span>${l}</button>`).join('')}</div>
     <div class="section-title">Notifications</div>
     <div class="list">
       <div class="row"><span class="lead">${icon('bell')}</span><div class="grow"><div class="t">Rappels et fiches prêtes</div><div class="s">${perm === 'granted' ? (NATIVE ? 'Activées : DS et devoirs rappelés 3 jours avant, la veille et le jour même' : 'Activées sur cet appareil') : perm === 'denied' ? 'Refusées — à réactiver dans Réglages iOS › ECAM › Notifications' : perm === 'old' ? 'Mets à jour l’app avec le dernier ECAM.ipa (SideStore)' :perm === 'unsupported' ? 'Installe l\'app pour les activer' : 'Désactivées'}</div></div></div>
@@ -1618,12 +1625,70 @@ async function recBar() {
 // Le Web Push n'existe pas dans l'app SideStore et l'APNs demande un compte Apple payant : l'app programme donc
 // elle-même ses rappels, à chaque actualisation. Ils sonnent même app fermée.
 let nativePerm = 'default';
+// Réveil : premier cours de la journée − 1 h (8 h → 7 h). Réglable, désactivable pour un jour ou complètement.
+const ALARM = { get on() { return store.get('alarmOn') === '1'; }, get before() { return +(store.get('alarmBefore') || 60); }, skip: () => new Set(JSON.parse(store.get('alarmSkip') || '[]')) };
+let alarmState = { available: false, status: 'unavailable' };
+function alarmPlan(days = 8) {
+  const out = [], skip = ALARM.skip();
+  for (let i = 0; i < days; i++) {
+    const d = addDays(todayStr(), i);
+    const evs = S.events.filter((e) => e.start.startsWith(d) && !S.courseOpts?.[e.uid]?.absent).sort((a, b) => a.start.localeCompare(b.start));
+    if (!evs.length || vacationOf(d)) continue;
+    const first = evs[0], at = shiftMin(first.start, -ALARM.before);
+    if (at <= nowStr()) continue;
+    out.push({ day: d, at, first, off: skip.has(d) });
+  }
+  return out;
+}
+async function syncAlarms() {
+  if (!NATIVE?.setAlarms || alarmState.status !== 'authorized') return;
+  const items = ALARM.on ? alarmPlan().filter((a) => !a.off).map((a) => ({ at: a.at, title: `Cours à ${a.first.start.slice(11, 16)} — ${a.first.subject}` })) : [];
+  const sig = JSON.stringify(items);
+  if (sig === store.get('alarmSent')) return; // rien n'a changé : on ne reprogramme pas
+  try { await NATIVE.setAlarms({ items }); store.set('alarmSent', sig); } catch (e) { toast(e.message || 'Réveil non programmé'); }
+}
+async function enableAlarm(on) {
+  if (on) {
+    alarmState.status = (await NATIVE.alarmAuthorize().catch(() => ({ status: 'unavailable' }))).status;
+    if (alarmState.status !== 'authorized') { toast(alarmState.status === 'denied' ? 'Alarmes refusées : Réglages iOS › ECAM › Alarmes' : 'Réveil indisponible (iOS 26 requis)', 4500); render(false); return; }
+  }
+  store.set('alarmOn', on ? '1' : '0'); store.set('alarmSent', '');
+  await syncAlarms(); haptic('success'); render(false);
+  if (on) { const n = alarmPlan().find((a) => !a.off); toast(n ? `Réveil réglé : ${dayLabel(n.day)} à ${n.at.slice(11, 16)}` : 'Réveil activé', 3500); }
+}
+function toggleAlarmDay(day) {
+  const sk = ALARM.skip();
+  sk.has(day) ? sk.delete(day) : sk.add(day);
+  store.set('alarmSkip', JSON.stringify([...sk].filter((d) => d >= todayStr())));
+  syncAlarms(); haptic('selection'); render(false);
+}
+function alarmSection() {
+  if (!NATIVE) return '';
+  if (!alarmState.available) return `<div class="section-title">Réveil</div><p class="note">Le réveil automatique demande iOS 26 et la dernière version de l’app.</p>`;
+  const plan = alarmPlan();
+  return `<div class="section-title">Réveil</div>
+    <div class="list">
+      <label class="row switch"><span class="lead">${icon('bell')}</span><div class="grow"><div class="t">Réveil automatique</div><div class="s">Une vraie alarme avant ton premier cours, même en silencieux</div></div><input type="checkbox" id="alarm-on" ${ALARM.on ? 'checked' : ''}><i></i></label>
+    </div>
+    ${ALARM.on ? `<div class="seg" style="margin-top:10px">${[45, 60, 75, 90].map((m) => `<button data-before="${m}" class="${ALARM.before === m ? 'on' : ''}">${m < 60 ? m + ' min' : Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) : '')} avant</button>`).join('')}</div>
+      <div class="list">${plan.map((a) => `<label class="row switch"><div class="grow"><div class="t">${dayLabel(a.day)} · ${a.off ? 'pas de réveil' : 'réveil ' + a.at.slice(11, 16)}</div><div class="s">Premier cours ${a.first.start.slice(11, 16)} — ${esc(a.first.subject)}</div></div><input type="checkbox" data-alarm-day="${a.day}" ${a.off ? '' : 'checked'}><i></i></label>`).join('') || '<div class="row plain"><div class="grow"><div class="s">Pas de cours dans les prochains jours.</div></div></div>'}</div>
+      <p class="note">Désactive un jour en particulier ci-dessus. La veille au soir, une notification te rappelle l’heure du réveil.</p>` : ''}`;
+}
+// Agenda : le réveil du jour affiché, désactivable d'un geste
+function alarmLine(day) {
+  if (!NATIVE || !ALARM.on || alarmState.status !== 'authorized') return '';
+  const a = alarmPlan().find((x) => x.day === day);
+  return a ? `<button class="alarm-line ${a.off ? 'off' : ''}" data-alarm-day="${day}">${icon('bell')}<span>${a.off ? 'Pas de réveil ce jour-là' : 'Réveil à ' + a.at.slice(11, 16)}</span><small>${a.off ? 'Réactiver' : 'Désactiver'}</small></button>` : '';
+}
 function nativeReminders() {
   const items = [
     ...S.tasks.filter((t) => !t.done).map((t) => ({ key: 't-' + t.id, title: t.kind === 'ds' ? `DS — ${t.subject}` : t.title, sub: t.kind === 'ds' ? (t.title !== 'DS' ? t.title : '') : t.subject, due: t.due, note: t.note, url: t.event_uid ? '/#cours/' + encodeURIComponent(t.event_uid) : '/#devoirs' })),
     ...S.events.filter((e) => isDS(e) && !S.tasks.some((t) => t.event_uid === e.uid)).map((e) => ({ key: 'e-' + e.uid.replace(/\W+/g, ''), title: `DS — ${e.subject}`, due: e.start, place: e.room, url: '/#cours/' + encodeURIComponent(e.uid) })),
   ];
   const out = [];
+  if (ALARM.on && alarmState.status === 'authorized') for (const a of alarmPlan(3).filter((x) => !x.off)) {
+    out.push({ id: 'reveil-' + a.day, at: addDays(a.day, -1) + 'T21:00', url: '/#reglages', title: `Réveil demain à ${a.at.slice(11, 16)}`, body: `Premier cours à ${a.first.start.slice(11, 16)} — ${a.first.subject}. Touche pour le changer ou le désactiver.` });
+  }
   const soon = addDays(todayStr(), 14);
   for (const e of S.events.filter((x) => otherBuilding(x) && x.start > nowStr() && x.start.slice(0, 10) <= soon)) {
     out.push({ id: 'bat-' + e.uid.replace(/\W+/g, ''), at: shiftMin(e.start, -20), important: true, url: '/#cours/' + encodeURIComponent(e.uid),
@@ -1648,7 +1713,8 @@ async function enableNativeNotifs() {
 }
 if (NATIVE) {
   NATIVE.notifStatus().then((r) => { nativePerm = r.status; scheduleNative(); if (location.hash === '#reglages') render(false); }).catch(() => { nativePerm = 'old'; });
-  addEventListener('ecam-state', () => { scheduleNative(); syncPending(); });
+  addEventListener('ecam-state', () => { scheduleNative(); syncPending(); syncAlarms(); });
+  NATIVE.alarmStatus?.().then((r) => { alarmState = r; syncAlarms(); if (location.hash === '#reglages') render(false); }).catch(() => {});
   document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(() => checkShared(), 600); });
   setTimeout(() => checkShared(), 1200);
   NATIVE.addListener?.('shared', () => checkShared()); // document reçu pendant que l'app est ouverte
@@ -1844,6 +1910,7 @@ function pagerTouch() {
 
 // Éléments cliquables qui changent quand le jour change (en-tête, volets)
 function bindRows(root) {
+  root.querySelectorAll('[data-alarm-day]').forEach((b) => (b.onclick = (e) => { if (b.tagName === 'INPUT' || b.tagName === 'BUTTON') { e.stopPropagation(); toggleAlarmDay(b.dataset.alarmDay); } }));
   root.querySelectorAll('[data-day]').forEach((b) => (b.onclick = () => goDay(b.dataset.day)));
   root.querySelectorAll('[data-week]').forEach((b) => (b.onclick = () => goDay(addDays(selDay, +b.dataset.week))));
   root.querySelectorAll('[data-href]').forEach((b) => (b.onclick = () => (location.hash = b.dataset.href)));
@@ -1890,6 +1957,15 @@ function bind(route, arg) {
   on('rec-guide', () => recGuide());
   // options du cours : enregistrées sur le serveur (le PC et Claude s'en servent)
   const saveOpts = async (o) => { try { const r = await api('/courses/opts', { method: 'POST', json: { uid: ev.uid, ...o } }); (S.courseOpts ||= {})[ev.uid] = r.opts; } catch (e) { toast(e.message); } };
+  on('opt-absent', async () => {
+    const on = $('#opt-absent', view).checked, tid = 'absent-' + ev.uid.replace(/\W+/g, '').slice(0, 40);
+    await saveOpts({ absent: on });
+    try {
+      if (on) await api('/tasks', { method: 'POST', json: { id: tid, subject: ev.subject, event_uid: ev.uid, due: addDays(ev.start, 1) + 'T18:00', title: `Rattraper le cours du ${dFmt(ev.start, { day: 'numeric', month: 'short' })}`, kind: 'devoir', note: 'Récupère les notes ou le support d’un camarade et ajoute-les au cours : la fiche sera faite pour rattraper seul.' } });
+      else await api('/tasks/' + tid, { method: 'DELETE' });
+    } catch (e) { toast(e.message); }
+    toast(on ? 'Absence notée — rattrapage ajouté à tes devoirs' : 'Absence retirée', 3000); haptic('medium'); refresh();
+  });
   on('opt-fiche', async () => { const on = $('#opt-fiche', view).checked; await saveOpts({ fiche: on }); toast(on ? 'Fiche de révision réactivée pour ce cours' : 'Pas de fiche pour ce cours : seuls les DS, devoirs et infos seront analysés', 3500); render(false); });
   const info = $('#opt-info', view);
   if (info) { let t; info.oninput = () => { clearTimeout(t); t = setTimeout(() => saveOpts({ info: info.value.trim() }), 900); }; info.onblur = () => { clearTimeout(t); saveOpts({ info: info.value.trim() }); }; }
@@ -1905,6 +1981,14 @@ function bind(route, arg) {
     catch (e) { toast(e.message); }
   });
   on('add-transcript', () => transcriptSheet(ev));
+  on('alarm-on', () => enableAlarm($('#alarm-on', view).checked));
+  view.querySelectorAll('[data-before]').forEach((b) => (b.onclick = () => { store.set('alarmBefore', b.dataset.before); syncAlarms(); render(false); }));
+  view.querySelectorAll('[data-theme-set]').forEach((b) => (b.onclick = () => {
+    const t = b.dataset.themeSet;
+    store.set('theme', t);
+    if (t === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+    render(false);
+  }));
   on('share-notes', () => shareNotesSheet());
   on('add-note', () => addNoteSheet());
   on('del-note', async () => {
