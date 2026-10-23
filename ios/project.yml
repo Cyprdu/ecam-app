@@ -31,6 +31,7 @@ targets:
         NSMicrophoneUsageDescription: "Pour enregistrer tes cours (ils sont transcrits et transformés en fiches)."
         UIBackgroundModes: [audio, fetch]
         NSSupportsLiveActivities: true
+        NSAlarmKitUsageDescription: "Pour te réveiller automatiquement avant ton premier cours."
         UIFileSharingEnabled: true                 # enregistrements visibles dans Fichiers › Sur mon iPhone › ECAM
         LSSupportsOpeningDocumentsInPlace: true
         # « Partager › ECAM » depuis Fichiers, Mail, Safari… : n'importe quel document

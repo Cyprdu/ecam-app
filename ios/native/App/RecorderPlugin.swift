@@ -29,7 +29,33 @@ public class RecorderPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "sendShared", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "dropShared", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "preview", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "alarmStatus", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "alarmAuthorize", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setAlarms", returnType: CAPPluginReturnPromise),
     ]
+
+    // ---------- Réveil automatique (AlarmKit, iOS 26) ----------
+    @objc func alarmStatus(_ call: CAPPluginCall) {
+        call.resolve(["available": Reveil.available, "status": Reveil.status()])
+    }
+
+    @objc func alarmAuthorize(_ call: CAPPluginCall) {
+        Task { call.resolve(["status": await Reveil.authorize()]) }
+    }
+
+    // items : [{ at: "AAAA-MM-JJTHH:MM" (heure de Paris), title }] — remplace toutes les alarmes ECAM
+    @objc func setAlarms(_ call: CAPPluginCall) {
+        let parse = DateFormatter()
+        parse.dateFormat = "yyyy-MM-dd'T'HH:mm"
+        parse.timeZone = TimeZone(identifier: "Europe/Paris")
+        let items: [(Date, String)] = (call.getArray("items", JSObject.self) ?? []).compactMap { it in
+            guard let at = it["at"] as? String, let d = parse.date(from: at) else { return nil }
+            return (d, it["title"] as? String ?? "Cours")
+        }
+        Task {
+            do { call.resolve(["scheduled": try await Reveil.replace(items)]) } catch { call.reject("Réveil impossible : \(error.localizedDescription)") }
+        }
+    }
 
     // ---------- Documents reçus par « Partager › ECAM » ----------
     override public func load() {

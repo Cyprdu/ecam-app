@@ -13,6 +13,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Xcode le plus récent
+        run: |
+          XC=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$XC" ]; then sudo xcode-select -s "$XC"; fi
+          xcodebuild -version
       - name: Projet Xcode
         run: brew install xcodegen && cd ios && xcodegen generate
       - name: Compilation
