@@ -1,7 +1,6 @@
 // Connecteur MCP pour Claude (claude.ai / app Claude) : Claude lit les cours et enregistre ses fiches dans l'app.
 // Protocole : JSON-RPC 2.0 en HTTP simple (« Streamable HTTP » sans flux).
 import { mergeManual } from './ecam.js';
-import { PLAN } from './alternance.js';
 import { report } from './modules.js';
 
 const VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
@@ -115,18 +114,6 @@ export function tools(ctx) {
         }
         const absNote = missed.length ? `ABSENCES de l'étudiant : ${missed.join(', ')} — ces séances sont à rattraper : explique leurs notions depuis le début.\n\n` : '';
         return out.length ? `Matière : ${s}${seance ? ' — séance du ' + seance : ''}\n\n` + absNote + out.join('\n\n') + (left < 500 ? '\n\n[Limite atteinte : le reste est accessible avec lire_document]' : '') : `Aucun contenu lisible pour ${s}${seance ? ' le ' + seance : ''}.`;
-      },
-    },
-    {
-      name: 'alternance',
-      description: "Recherche d'alternance de l'étudiant (rentrée septembre 2027) : profil visé, entreprises cibles et où il en est avec chacune, plateformes, calendrier, attendus des recruteurs, conseils de CV. À lire avant de rédiger un CV, une lettre ou de préparer un entretien.",
-      inputSchema: { type: 'object', properties: {} },
-      async run() {
-        const st = JSON.parse((await DB.prepare("SELECT value FROM kv WHERE key='alternance'").first())?.value || '{}');
-        const c = (x) => { const s = st.companies?.[x.id] || {}; return `- ${x.name} (${x.where}) — ${s.status || 'à faire'}${s.applied ? ', candidaté le ' + s.applied : ''}${s.note ? ' — note : ' + s.note : ''}\n  Pourquoi : ${x.why}\n  Quand : ${x.when}\n  Attendus : ${x.expect}\n  CV : ${x.cv}`; };
-        return [`Objectif : ${PLAN.goal.title}, ${PLAN.goal.where}, à partir de ${PLAN.goal.start}. ${PLAN.goal.wish}.`, 'ENTREPRISES :', ...PLAN.companies.map(c),
-          'CALENDRIER (estimations) :', ...PLAN.steps.map(([d, t]) => `- ${d} : ${t}`), 'ATTENDUS DES RECRUTEURS :', ...PLAN.expect.map((x) => '- ' + x), 'CONTENU DU CV :', ...PLAN.cv.map((x) => '- ' + x),
-          'Règle : ne mettre dans un CV ou une lettre que ce qui est réel ; demander à l’étudiant ce qui manque (expériences, niveau d’anglais, projets perso).'].join('\n');
       },
     },
     {

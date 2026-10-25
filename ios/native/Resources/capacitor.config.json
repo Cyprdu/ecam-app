@@ -7,7 +7,6 @@
     "allowNavigation": ["ecam-app.cyprien-veyret.workers.dev", "claude.ai", "*.ecam.fr"]
   },
   "ios": {
-    "contentInset": "never",
-    "backgroundColor": "#0e0d0c"
+    "contentInset": "never"
   }
 }

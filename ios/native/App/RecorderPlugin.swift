@@ -32,7 +32,24 @@ public class RecorderPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "alarmStatus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "alarmAuthorize", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setAlarms", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "tabs", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "theme", returnType: CAPPluginReturnPromise),
     ]
+
+    // ---------- Barre d'onglets native et thème ----------
+    @objc func tabs(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            (self.bridge?.viewController as? EcamViewController)?.setTabs(selected: call.getString("selected"), hidden: call.getBool("hidden") ?? false)
+            call.resolve()
+        }
+    }
+
+    @objc func theme(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            (self.bridge?.viewController as? EcamViewController)?.setTheme(call.getString("mode") ?? "auto")
+            call.resolve()
+        }
+    }
 
     // ---------- Réveil automatique (AlarmKit, iOS 26) ----------
     @objc func alarmStatus(_ call: CAPPluginCall) {
