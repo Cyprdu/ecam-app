@@ -1453,7 +1453,11 @@ const NTABS = !!NATIVE?.tabs;
 if (NTABS) document.documentElement.classList.add('native-tabs');
 function nativeTabs(o) { if (NTABS) NATIVE.tabs(o).catch(() => {}); }
 window.nativeTab = (t) => { if (location.hash === '#' + t) view.scrollTo({ top: 0, behavior: 'smooth' }); else location.hash = '#' + t; }; // retoucher l'onglet : remonter en haut
-const nativeTheme = () => NATIVE?.theme?.({ mode: store.get('theme') || 'auto' }).catch(() => {});
+const nativeTheme = () => {
+  const t = store.get('theme') || 'auto';
+  document.querySelectorAll('meta[name=theme-color]').forEach((m) => (m.content = t === 'auto' ? (m.media.includes('dark') ? '#0c0d0f' : '#f5f6f8') : t === 'dark' ? '#0c0d0f' : '#f5f6f8'));
+  NATIVE?.theme?.({ mode: t }).catch(() => {});
+};
 nativeTheme();
 const haptic = (style = 'light') => NATIVE?.haptic({ style }).catch(() => {});
 
@@ -1540,7 +1544,9 @@ function alarmPlan(days = 8) {
 }
 async function syncAlarms() {
   if (!NATIVE?.setAlarms || alarmState.status !== 'authorized') return;
-  const items = ALARM.on ? alarmPlan().filter((a) => !a.off).map((a) => ({ at: a.at, title: `Cours à ${a.first.start.slice(11, 16)} — ${a.first.subject}` })) : [];
+  let items = ALARM.on ? alarmPlan().filter((a) => !a.off).map((a) => ({ at: a.at, title: `Cours à ${a.first.start.slice(11, 16)} — ${a.first.subject}` })) : [];
+  // alarmes ponctuelles posées depuis l'ordinateur (test, rappel)
+  items = items.concat((S.alarmes || []).filter((a) => a.at > nowStr()));
   const sig = JSON.stringify(items);
   if (sig === store.get('alarmSent')) return; // rien n'a changé : on ne reprogramme pas
   try { await NATIVE.setAlarms({ items }); store.set('alarmSent', sig); } catch (e) { toast(e.message || 'Réveil non programmé'); }
