@@ -684,3 +684,103 @@ input, textarea, select { font-size: 16px; }
 @media (hover: hover) and (pointer: fine) and (min-width: 1024px) {
   .tabbar a:hover { background: var(--fill); color: var(--text); }
 }
+
+/* ==========================================================================
+   Charte 2 — iOS « inset grouped » (skills frontend-design, mobile-design, ui-design-system)
+   Base : fond gris système, surfaces sans ombre, filets fins, échelle typographique Apple.
+   Un seul élément fort : l'agenda (jour choisi, couleur de la matière sur chaque cours).
+   ========================================================================== */
+:root {
+  --bg: #f2f2f7; --card: #ffffff; --raised: #ffffff; --text: #000000; --muted: #6c6c70; --subtle: #8e8e93;
+  --line: #e3e3e8; --fill: #e9e9ee; --accent: #e8590c; --ink: #e8590c; --accent-soft: #fdece2;
+  --shadow: none; --shadow-lg: 0 18px 50px -12px rgba(0, 0, 0, .22), 0 0 0 .5px rgba(0, 0, 0, .06);
+  --radius: 18px; --radius-sm: 12px; --gutter: 16px;
+  --t-large: 34px; --t-title: 22px; --t-body: 17px; --t-sub: 15px; --t-foot: 13px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #000000; --card: #1c1c1e; --raised: #2c2c2e; --text: #ffffff; --muted: #a1a1a6; --subtle: #7c7c82; --line: #38383a; --fill: #2c2c2e; --shadow: none; --shadow-lg: 0 18px 50px -12px rgba(0, 0, 0, .7), 0 0 0 .5px rgba(255, 255, 255, .08); }
+}
+:root[data-theme="dark"] { --bg: #000000; --card: #1c1c1e; --raised: #2c2c2e; --text: #ffffff; --muted: #a1a1a6; --subtle: #7c7c82; --line: #38383a; --fill: #2c2c2e; --shadow: none; --shadow-lg: 0 18px 50px -12px rgba(0, 0, 0, .7), 0 0 0 .5px rgba(255, 255, 255, .08); }
+
+body { font-size: var(--t-body); letter-spacing: 0; line-height: 1.35; }
+main { padding-left: max(var(--gutter), calc((100% - 644px) / 2)); padding-right: max(var(--gutter), calc((100% - 644px) / 2)); }
+
+/* Grands titres iOS */
+.head { margin: 6px 0 18px; }
+.head h1 { font-size: var(--t-large); font-weight: 700; letter-spacing: -.022em; line-height: 1.1; }
+.head .sub { font-size: var(--t-sub); color: var(--muted); margin-top: 4px; }
+
+/* Titres de section : en minuscules, à la place des capitales espacées */
+.section-title, .module .section-title { font-size: 20px; font-weight: 700; letter-spacing: -.012em; color: var(--text); text-transform: none; margin: 30px 2px 10px; }
+.section-title > span:last-child:not(:first-child), .section-title small { font-size: var(--t-foot); font-weight: 500; color: var(--muted); letter-spacing: 0; }
+.section-title button { font-size: var(--t-sub); font-weight: 500; }
+.mod-avg span { text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 600; }
+.doc h3 { text-transform: none; letter-spacing: -.005em; font-size: 17px; color: var(--text); }
+.schema b { text-transform: none; letter-spacing: 0; font-size: 12.5px; }
+
+/* Surfaces : pas d'ombre ni de bordure, le contraste fond/surface suffit (comme Réglages iOS) */
+.card, .list, .doc, .event, .icon-btn, .day, .btn.secondary, .action, .player, .theme-pick button, .field input, .field select, .field textarea, #opt-info { border-color: transparent; box-shadow: none; }
+.card, .list, .event, .doc { border-radius: var(--radius); }
+.row { min-height: 50px; padding: 11px 16px; gap: 14px; }
+.row .t { font-size: var(--t-body); font-weight: 400; letter-spacing: -.01em; }
+.row .s { font-size: var(--t-sub); color: var(--muted); }
+.row + .row::before { left: 54px; border-top: .5px solid var(--line); }
+.row.plain + .row.plain::before, .list > .switch + .switch::before { left: 16px; }
+.row .lead { color: var(--accent); opacity: 1; }
+.row .chev { opacity: .45; }
+
+/* Boutons iOS : pleins, 50 px, texte 17 semi-gras */
+.btn { min-height: 50px; border-radius: 14px; font-size: var(--t-body); font-weight: 600; }
+.btn.secondary { background: var(--card); color: var(--accent); }
+.icon-btn { background: var(--card); color: var(--accent); width: 38px; height: 38px; }
+.action { border-radius: var(--radius); font-size: var(--t-foot); }
+
+/* Contrôle segmenté iOS */
+.seg { background: color-mix(in srgb, #767680 14%, transparent); border-radius: 10px; padding: 2px; }
+.seg button { border-radius: 8px; padding: 7px; font-size: 14px; font-weight: 500; color: var(--text); }
+.seg button.on { background: var(--raised); font-weight: 600; box-shadow: 0 3px 8px rgba(0, 0, 0, .12), 0 3px 1px rgba(0, 0, 0, .04); }
+
+/* Champs : fond de surface, filet uniquement au focus */
+.field span { font-size: var(--t-foot); font-weight: 500; text-transform: none; }
+.field input, .field select, .field textarea, #opt-info { background: var(--card); border: 1px solid transparent; border-radius: 12px; }
+
+/* Puces */
+.chip { font-size: 12.5px; font-weight: 600; padding: 3px 9px; }
+
+/* ---------- L'agenda : l'élément signature ---------- */
+.days { gap: 4px; }
+.day { width: 46px; padding: 8px 0 7px; border-radius: 14px; background: transparent; }
+.day small { font-size: 11px; letter-spacing: .02em; font-weight: 600; }
+.day b { font-size: 20px; font-weight: 600; }
+.day.sel { box-shadow: 0 8px 18px -8px color-mix(in srgb, var(--accent) 80%, transparent); }
+.event { padding: 14px 16px 14px 14px; gap: 12px; }
+.event .bar { width: 4px; border-radius: 4px; }
+.event .time b { font-size: var(--t-sub); font-weight: 600; }
+.event .time span { font-size: var(--t-foot); }
+.event .title { font-size: var(--t-body); font-weight: 600; letter-spacing: -.012em; }
+.event .meta { font-size: var(--t-foot); }
+.event.live { box-shadow: inset 0 0 0 1.5px var(--accent); }
+
+/* Tuiles (soldes, DS) */
+.tile .k { font-size: var(--t-foot); font-weight: 500; }
+.tile .v { font-weight: 700; letter-spacing: -.03em; }
+
+/* Feuilles : surface relevée, coins iOS 26 */
+.sheet { background: var(--bg); border-radius: 28px 28px 0 0; }
+.sheet h2 { font-size: var(--t-title); font-weight: 700; letter-spacing: -.015em; }
+@media (min-width: 1024px) { .sheet { border-radius: 24px; } }
+
+/* ---------- Barre d'onglets web : capsule de verre flottante (iOS 26) ---------- */
+@media (max-width: 1023px) {
+  .tabbar {
+    left: 12px; right: 12px; bottom: calc(var(--bottom) + 8px); margin: 0 auto; max-width: 520px; transform: none;
+    padding: 6px; border-radius: 32px; border: .5px solid color-mix(in srgb, var(--text) 10%, transparent);
+    background: color-mix(in srgb, var(--card) 72%, transparent); backdrop-filter: saturate(180%) blur(24px); -webkit-backdrop-filter: saturate(180%) blur(24px);
+    box-shadow: 0 10px 30px -10px rgba(0, 0, 0, .25);
+  }
+  .tabbar a { border-radius: 26px; padding: 7px 0 6px; font-size: 10.5px; font-weight: 500; color: var(--text); }
+  .tabbar a.on { color: var(--accent); background: color-mix(in srgb, var(--text) 7%, transparent); font-weight: 600; }
+  .tab-ind { display: none; }
+  main { padding-bottom: calc(var(--bottom) + 110px); }
+}
+.mod-avg span { white-space: nowrap; }
