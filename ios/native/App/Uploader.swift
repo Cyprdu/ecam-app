@@ -24,6 +24,27 @@ final class Uploader: NSObject, URLSessionDataDelegate {
 
     private func infoURL(_ file: URL) -> URL { file.appendingPathExtension("json") }
 
+    // Copie de sécurité : un enregistrement envoyé reste 5 jours dans « Envoyés » (app Fichiers › ECAM),
+    // un enregistrement refusé par le serveur va dans « Non envoyés » et n'est jamais effacé.
+    static func folder(_ name: String) -> URL {
+        let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(name, isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+    private func keep(_ path: String, in name: String) {
+        let fm = FileManager.default, src = URL(fileURLWithPath: path)
+        let dest = Uploader.folder(name).appendingPathComponent(src.lastPathComponent)
+        try? fm.removeItem(at: dest)
+        if (try? fm.moveItem(at: src, to: dest)) == nil { try? fm.removeItem(at: src) }
+        try? fm.removeItem(at: infoURL(src))
+    }
+    private func purgeSent() {
+        let fm = FileManager.default, limit = Date().addingTimeInterval(-5 * 86400)
+        for f in (try? fm.contentsOfDirectory(at: Uploader.folder("Envoyés"), includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] {
+            if let d = try? f.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, d < limit { try? fm.removeItem(at: f) }
+        }
+    }
+
     /// Met un fichier dans la file (avec le cours et le lien d'envoi), puis l'envoie.
     func enqueue(file: URL, course: String, url: URL?, name: String? = nil, mime: String? = nil) {
         var meta: [String: String] = ["course": course]
@@ -38,6 +59,7 @@ final class Uploader: NSObject, URLSessionDataDelegate {
     func resumePending(uploadURL: URL? = nil) {
         if let uploadURL { UserDefaults.standard.set(uploadURL.absoluteString, forKey: "uploadURL") }
         let fallback = UserDefaults.standard.string(forKey: "uploadURL").flatMap(URL.init)
+        purgeSent()
         session.getAllTasks { tasks in
             let busy = Set(tasks.filter { $0.state == .running || $0.state == .suspended }.compactMap { $0.taskDescription?.components(separatedBy: "|").first })
             for file in self.queued() where !busy.contains(file.path) {
@@ -57,10 +79,17 @@ final class Uploader: NSObject, URLSessionDataDelegate {
     func pendingList(_ done: @escaping ([[String: Any]]) -> Void) {
         session.getAllTasks { tasks in
             let busy = Set(tasks.filter { $0.state == .running }.compactMap { $0.taskDescription?.components(separatedBy: "|").first })
-            done(self.queued().map { f in
-                let size = (try? f.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-                return ["name": f.deletingPathExtension().lastPathComponent, "size": size, "sending": busy.contains(f.path)]
-            })
+            let fm = FileManager.default
+            let size = { (f: URL) in (try? f.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0 }
+            var items: [[String: Any]] = self.queued().map { f in ["name": f.deletingPathExtension().lastPathComponent, "size": size(f), "sending": busy.contains(f.path)] }
+            for dir in (try? fm.contentsOfDirectory(at: Recorder.root, includingPropertiesForKeys: nil)) ?? [] where dir.hasDirectoryPath {
+                let parts = ((try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.fileSizeKey])) ?? []).filter { $0.pathExtension == "m4a" }
+                if !parts.isEmpty { items.append(["name": dir.lastPathComponent + " (à assembler)", "size": parts.map(size).reduce(0, +), "sending": false]) }
+            }
+            for f in (try? fm.contentsOfDirectory(at: Uploader.folder("Non envoyés"), includingPropertiesForKeys: [.fileSizeKey])) ?? [] where f.pathExtension != "json" {
+                items.append(["name": f.deletingPathExtension().lastPathComponent + " (refusé, gardé)", "size": size(f), "sending": false])
+            }
+            done(items)
         }
     }
 
@@ -90,17 +119,19 @@ final class Uploader: NSObject, URLSessionDataDelegate {
         let path = parts.first ?? "", course = parts.count > 1 ? parts[1] : ""
         let status = (task.response as? HTTPURLResponse)?.statusCode ?? 0
         if error == nil && (200..<300).contains(status) {
-            // Reçu par le serveur : on peut libérer la place sur le téléphone
-            try? FileManager.default.removeItem(atPath: path)
-            try? FileManager.default.removeItem(at: infoURL(URL(fileURLWithPath: path)))
+            // Reçu par le serveur : copie de sécurité gardée 5 jours (dossier « Envoyés »), documents supprimés
+            if path.hasSuffix(".m4a") { keep(path, in: "Envoyés") } else {
+                try? FileManager.default.removeItem(atPath: path)
+                try? FileManager.default.removeItem(at: infoURL(URL(fileURLWithPath: path)))
+            }
             if path.hasSuffix(".m4a") {
                 notify("Enregistrement envoyé", "\(course.isEmpty ? "Ton cours" : course) — transcription et fiche automatiques")
             } else {
                 notify("Document ajouté", "Rangé dans \(course)")
             }
-        } else if status == 400 { // refusé car vide (moins d'une seconde d'audio) : inutile de le renvoyer
-            try? FileManager.default.removeItem(atPath: path)
-            try? FileManager.default.removeItem(at: infoURL(URL(fileURLWithPath: path)))
+        } else if status == 400 { // refusé (vide ?) : plus renvoyé, mais gardé — on n'efface jamais un enregistrement sans copie
+            keep(path, in: "Non envoyés")
+            notify("Enregistrement refusé par le serveur", "Gardé sur l'iPhone : Fichiers › ECAM › Non envoyés")
         } else if (error as? URLError)?.code != .cancelled {
             notify("Envoi pas encore fait", "L'enregistrement est gardé sur l'iPhone : il sera renvoyé automatiquement à la prochaine ouverture de l'app.")
         }

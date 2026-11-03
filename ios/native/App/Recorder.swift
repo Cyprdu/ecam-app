@@ -188,6 +188,8 @@ final class Recorder: NSObject {
                 export.outputFileType = .m4a
                 await export.export()
                 ok = export.status == .completed
+                // « terminé » ne suffit pas : le fichier assemblé doit vraiment durer (presque) toute la séance
+                if ok, let d = try? await AVURLAsset(url: out).load(.duration), d.seconds < cursor.seconds * 0.95 { ok = false }
             }
             await MainActor.run {
                 if ok {
