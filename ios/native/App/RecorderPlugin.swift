@@ -68,9 +68,9 @@ public class RecorderPlugin: CAPPlugin, CAPBridgedPlugin {
         let parse = DateFormatter()
         parse.dateFormat = "yyyy-MM-dd'T'HH:mm"
         parse.timeZone = TimeZone(identifier: "Europe/Paris")
-        let items: [(Date, String)] = (call.getArray("items", JSObject.self) ?? []).compactMap { it in
+        let items: [(Date, String, Bool)] = (call.getArray("items", JSObject.self) ?? []).compactMap { it in
             guard let at = it["at"] as? String, let d = parse.date(from: at) else { return nil }
-            return (d, it["title"] as? String ?? "Cours")
+            return (d, it["title"] as? String ?? "Cours", it["soft"] as? Bool ?? false)
         }
         Task {
             do { call.resolve(["scheduled": try await Reveil.replace(items)]) } catch { call.reject("Réveil impossible : \(error.localizedDescription)") }

@@ -1545,7 +1545,7 @@ function alarmPlan(days = 8) {
 async function syncAlarms() {
   if (!NATIVE?.setAlarms || alarmState.status !== 'authorized') return;
   let items = ALARM.on ? alarmPlan().filter((a) => !a.off).flatMap((a) => [
-    { at: shiftMin(a.at, -5), title: `Debout dans 5 min — cours à ${a.first.start.slice(11, 16)}` },
+    { at: shiftMin(a.at, -5), title: `Debout dans 5 min — cours à ${a.first.start.slice(11, 16)}`, soft: true }, // ton son doux
     { at: a.at, title: `Cours à ${a.first.start.slice(11, 16)} — ${a.first.subject}` },
   ]) : [];
   // alarmes ponctuelles posées depuis l'ordinateur (test, rappel)
@@ -1580,8 +1580,8 @@ function alarmSection() {
     ${ALARM.on ? `<div class="seg" style="margin-top:10px">${[45, 60, 75, 90].map((m) => `<button data-before="${m}" class="${ALARM.before === m ? 'on' : ''}">${m < 60 ? m + ' min' : Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) : '')} avant</button>`).join('')}</div>
       <div class="list">${plan.map((a) => `<label class="row switch"><div class="grow"><div class="t">${dayLabel(a.day)} · ${a.off ? 'pas de réveil' : 'réveil ' + shiftMin(a.at, -5).slice(11, 16) + ' et ' + a.at.slice(11, 16)}</div><div class="s">Premier cours ${a.first.start.slice(11, 16)} — ${esc(a.first.subject)}</div></div><input type="checkbox" data-alarm-day="${a.day}" ${a.off ? '' : 'checked'}><i></i></label>`).join('') || '<div class="row plain"><div class="grow"><div class="s">Pas de cours dans les prochains jours.</div></div></div>'}</div>
       <div class="section-title">Sonnerie</div>
-      <div class="list">${NATIVE.alarmPickSound ? `<button class="row" id="alarm-sound"><span class="lead">${icon('mic')}</span><div class="grow"><div class="t">${alarmState.sound ? esc(alarmState.sound) : 'Son par défaut'}</div><div class="s">Choisir un son dans Fichiers (MP3, M4A, WAV…, 30 s max)</div></div>${icon('chevron-right', 'chev')}</button>${alarmState.sound ? `<button class="row" id="alarm-sound-reset"><span class="lead">${icon('x')}</span><div class="grow"><div class="t">Revenir au son par défaut</div></div></button>` : ''}` : '<div class="row plain"><div class="grow"><div class="s">Installe la dernière version de l’app pour choisir ta sonnerie.</div></div></div>'}</div>
-      <p class="note">Deux alarmes : 5 min avant, puis à l’heure prévue. Désactive un jour en particulier ci-dessus. La veille au soir, une notification te rappelle l’heure du réveil.</p>` : ''}`;
+      <div class="list">${NATIVE.alarmPickSound ? `<button class="row" id="alarm-sound"><span class="lead">${icon('mic')}</span><div class="grow"><div class="t">${alarmState.sound ? esc(alarmState.sound) : 'Son par défaut'}</div><div class="s">Pour la 1re alarme (5 min avant) · choisir dans Fichiers, 30 s max</div></div>${icon('chevron-right', 'chev')}</button>${alarmState.sound ? `<button class="row" id="alarm-sound-reset"><span class="lead">${icon('x')}</span><div class="grow"><div class="t">Revenir au son par défaut</div></div></button>` : ''}` : '<div class="row plain"><div class="grow"><div class="s">Installe la dernière version de l’app pour choisir ta sonnerie.</div></div></div>'}</div>
+      <p class="note">Deux alarmes : 5 min avant avec ta sonnerie, puis à l’heure prévue avec l’alarme de base. Désactive un jour en particulier ci-dessus. La veille au soir, une notification te rappelle l’heure du réveil.</p>` : ''}`;
 }
 // Agenda : le réveil du jour affiché, désactivable d'un geste
 function alarmLine(day) {

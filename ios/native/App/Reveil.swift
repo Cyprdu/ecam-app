@@ -83,8 +83,8 @@ enum Reveil {
         return "unavailable"
     }
 
-    /// items : [(date, titre)] — remplace toutes les alarmes ECAM ; renvoie le nombre programmé
-    static func replace(_ items: [(Date, String)]) async throws -> Int {
+    /// items : [(date, titre, sonnerie perso)] — remplace toutes les alarmes ECAM ; renvoie le nombre programmé
+    static func replace(_ items: [(Date, String, Bool)]) async throws -> Int {
         #if canImport(AlarmKit)
         if #available(iOS 26.0, *) {
             let manager = AlarmManager.shared
@@ -92,12 +92,13 @@ enum Reveil {
                 if let id = UUID(uuidString: raw) { try? manager.cancel(id: id) }
             }
             var ids: [String] = []
-            for (date, title) in items where date > Date() {
+            for (date, title, soft) in items where date > Date() {
                 let id = UUID()
                 let alert = AlarmPresentation.Alert(title: LocalizedStringResource(stringLiteral: title),
                                                     stopButton: AlarmButton(text: "Arrêter", textColor: .white, systemImageName: "stop.fill"))
                 let attributes = AlarmAttributes<EcamAlarm>(presentation: AlarmPresentation(alert: alert), metadata: EcamAlarm(), tintColor: .orange)
-                let sound: AlertConfiguration.AlertSound = soundFile.map { .named($0) } ?? .default
+                // 1re alarme : la sonnerie choisie (douce) ; 2e : l'alarme de base d'iOS
+                let sound: AlertConfiguration.AlertSound = soft ? (soundFile.map { .named($0) } ?? .default) : .default
                 let configuration = AlarmManager.AlarmConfiguration<EcamAlarm>(schedule: .fixed(date), attributes: attributes, sound: sound)
                 _ = try await manager.schedule(id: id, configuration: configuration)
                 ids.append(id.uuidString)
