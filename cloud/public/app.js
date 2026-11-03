@@ -1544,10 +1544,13 @@ function alarmPlan(days = 8) {
 }
 async function syncAlarms() {
   if (!NATIVE?.setAlarms || alarmState.status !== 'authorized') return;
-  let items = ALARM.on ? alarmPlan().filter((a) => !a.off).map((a) => ({ at: a.at, title: `Cours à ${a.first.start.slice(11, 16)} — ${a.first.subject}` })) : [];
+  let items = ALARM.on ? alarmPlan().filter((a) => !a.off).flatMap((a) => [
+    { at: shiftMin(a.at, -5), title: `Debout dans 5 min — cours à ${a.first.start.slice(11, 16)}` },
+    { at: a.at, title: `Cours à ${a.first.start.slice(11, 16)} — ${a.first.subject}` },
+  ]) : [];
   // alarmes ponctuelles posées depuis l'ordinateur (test, rappel)
   items = items.concat((S.alarmes || []).filter((a) => a.at > nowStr()));
-  const sig = JSON.stringify(items);
+  const sig = JSON.stringify([items, alarmState.sound || '']);
   if (sig === store.get('alarmSent')) return; // rien n'a changé : on ne reprogramme pas
   try { await NATIVE.setAlarms({ items }); store.set('alarmSent', sig); } catch (e) { toast(e.message || 'Réveil non programmé'); }
 }
@@ -1575,14 +1578,16 @@ function alarmSection() {
       <label class="row switch"><span class="lead">${icon('bell')}</span><div class="grow"><div class="t">Réveil automatique</div><div class="s">Une vraie alarme avant ton premier cours, même en silencieux</div></div><input type="checkbox" id="alarm-on" ${ALARM.on ? 'checked' : ''}><i></i></label>
     </div>
     ${ALARM.on ? `<div class="seg" style="margin-top:10px">${[45, 60, 75, 90].map((m) => `<button data-before="${m}" class="${ALARM.before === m ? 'on' : ''}">${m < 60 ? m + ' min' : Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) : '')} avant</button>`).join('')}</div>
-      <div class="list">${plan.map((a) => `<label class="row switch"><div class="grow"><div class="t">${dayLabel(a.day)} · ${a.off ? 'pas de réveil' : 'réveil ' + a.at.slice(11, 16)}</div><div class="s">Premier cours ${a.first.start.slice(11, 16)} — ${esc(a.first.subject)}</div></div><input type="checkbox" data-alarm-day="${a.day}" ${a.off ? '' : 'checked'}><i></i></label>`).join('') || '<div class="row plain"><div class="grow"><div class="s">Pas de cours dans les prochains jours.</div></div></div>'}</div>
-      <p class="note">Désactive un jour en particulier ci-dessus. La veille au soir, une notification te rappelle l’heure du réveil.</p>` : ''}`;
+      <div class="list">${plan.map((a) => `<label class="row switch"><div class="grow"><div class="t">${dayLabel(a.day)} · ${a.off ? 'pas de réveil' : 'réveil ' + shiftMin(a.at, -5).slice(11, 16) + ' et ' + a.at.slice(11, 16)}</div><div class="s">Premier cours ${a.first.start.slice(11, 16)} — ${esc(a.first.subject)}</div></div><input type="checkbox" data-alarm-day="${a.day}" ${a.off ? '' : 'checked'}><i></i></label>`).join('') || '<div class="row plain"><div class="grow"><div class="s">Pas de cours dans les prochains jours.</div></div></div>'}</div>
+      <div class="section-title">Sonnerie</div>
+      <div class="list">${NATIVE.alarmPickSound ? `<button class="row" id="alarm-sound"><span class="lead">${icon('mic')}</span><div class="grow"><div class="t">${alarmState.sound ? esc(alarmState.sound) : 'Son par défaut'}</div><div class="s">Choisir un son dans Fichiers (MP3, M4A, WAV…, 30 s max)</div></div>${icon('chevron-right', 'chev')}</button>${alarmState.sound ? `<button class="row" id="alarm-sound-reset"><span class="lead">${icon('x')}</span><div class="grow"><div class="t">Revenir au son par défaut</div></div></button>` : ''}` : '<div class="row plain"><div class="grow"><div class="s">Installe la dernière version de l’app pour choisir ta sonnerie.</div></div></div>'}</div>
+      <p class="note">Deux alarmes : 5 min avant, puis à l’heure prévue. Désactive un jour en particulier ci-dessus. La veille au soir, une notification te rappelle l’heure du réveil.</p>` : ''}`;
 }
 // Agenda : le réveil du jour affiché, désactivable d'un geste
 function alarmLine(day) {
   if (!NATIVE || !ALARM.on || alarmState.status !== 'authorized') return '';
   const a = alarmPlan().find((x) => x.day === day);
-  return a ? `<button class="alarm-line ${a.off ? 'off' : ''}" data-alarm-day="${day}">${icon('bell')}<span>${a.off ? 'Pas de réveil ce jour-là' : 'Réveil à ' + a.at.slice(11, 16)}</span><small>${a.off ? 'Réactiver' : 'Désactiver'}</small></button>` : '';
+  return a ? `<button class="alarm-line ${a.off ? 'off' : ''}" data-alarm-day="${day}">${icon('bell')}<span>${a.off ? 'Pas de réveil ce jour-là' : 'Réveil à ' + shiftMin(a.at, -5).slice(11, 16) + ' et ' + a.at.slice(11, 16)}</span><small>${a.off ? 'Réactiver' : 'Désactiver'}</small></button>` : '';
 }
 function nativeReminders() {
   const items = [
@@ -1883,6 +1888,11 @@ function bind(route, arg) {
   });
   on('add-transcript', () => transcriptSheet(ev));
   on('alarm-on', () => enableAlarm($('#alarm-on', view).checked));
+  on('alarm-sound', async () => {
+    try { const r = await NATIVE.alarmPickSound(); if (!r?.name) return; alarmState.sound = r.name; await syncAlarms(); haptic('success'); toast('Sonnerie : ' + r.name); render(false); }
+    catch (e) { toast(e.message || 'Son illisible'); }
+  });
+  on('alarm-sound-reset', async () => { await NATIVE.alarmSoundReset().catch(() => {}); alarmState.sound = ''; await syncAlarms(); toast('Son par défaut'); render(false); });
   view.querySelectorAll('[data-before]').forEach((b) => (b.onclick = () => { store.set('alarmBefore', b.dataset.before); syncAlarms(); render(false); }));
   view.querySelectorAll('[data-theme-set]').forEach((b) => (b.onclick = () => {
     const t = b.dataset.themeSet;

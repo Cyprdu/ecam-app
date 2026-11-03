@@ -3,6 +3,7 @@ import Capacitor
 import Foundation
 import UIKit
 import QuickLook
+import UniformTypeIdentifiers
 import UserNotifications
 
 // Pont entre l'app web et l'enregistreur natif.
@@ -33,6 +34,8 @@ public class RecorderPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "alarmAuthorize", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setAlarms", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "tabs", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "alarmPickSound", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "alarmSoundReset", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "theme", returnType: CAPPluginReturnPromise),
     ]
 
@@ -53,7 +56,7 @@ public class RecorderPlugin: CAPPlugin, CAPBridgedPlugin {
 
     // ---------- Réveil automatique (AlarmKit, iOS 26) ----------
     @objc func alarmStatus(_ call: CAPPluginCall) {
-        call.resolve(["available": Reveil.available, "status": Reveil.status()])
+        call.resolve(["available": Reveil.available, "status": Reveil.status(), "sound": Reveil.soundLabel])
     }
 
     @objc func alarmAuthorize(_ call: CAPPluginCall) {
@@ -236,4 +239,34 @@ extension RecorderPlugin: QLPreviewControllerDataSource {
 
     public func numberOfPreviewItems(in controller: QLPreviewController) -> Int { RecorderPlugin.previewFile == nil ? 0 : 1 }
     public func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem { (RecorderPlugin.previewFile ?? URL(fileURLWithPath: "/")) as NSURL }
+}
+
+// ---------- Sonnerie du réveil : un son choisi dans Fichiers ----------
+extension RecorderPlugin: UIDocumentPickerDelegate {
+    private static var soundCall: CAPPluginCall?
+
+    @objc func alarmPickSound(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            RecorderPlugin.soundCall = call
+            let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.audio], asCopy: true)
+            picker.delegate = self
+            self.bridge?.viewController?.present(picker, animated: true)
+        }
+    }
+
+    @objc func alarmSoundReset(_ call: CAPPluginCall) {
+        Reveil.resetSound()
+        call.resolve()
+    }
+
+    public func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        guard let call = RecorderPlugin.soundCall, let url = urls.first else { return }
+        RecorderPlugin.soundCall = nil
+        do { call.resolve(["name": try Reveil.importSound(from: url)]) } catch { call.reject("Ce son n'est pas lisible") }
+    }
+
+    public func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        RecorderPlugin.soundCall?.resolve([:])
+        RecorderPlugin.soundCall = nil
+    }
 }
