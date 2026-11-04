@@ -331,7 +331,7 @@ function vCours(uid) {
       <button class="row" id="add-transcript"><span class="lead">${icon('text')}</span><div class="grow"><div class="t">Ajouter la transcription en texte</div><div class="s">Texte du cours tapé ou collé, à la place ou en plus de l’audio</div></div>${icon('chevron-right', 'chev')}</button></div>
     ${fiches.length || jobs.length ? `<div class="section-title">Fiche de révision</div><div class="list">${fiches.map((f) => `<a class="row" href="#fiche/${f.id}"><span class="lead">${icon('sparkles')}</span><div class="grow"><div class="t">${esc(f.name)}</div><div class="s">Prête · ${dFmt(f.created, { day: 'numeric', month: 'short' })}</div></div>${icon('chevron-right', 'chev')}</a>`).join('')}${jobRows(jobs)}</div>` : ''}
     ${tasks.length ? `<div class="section-title">Devoirs</div><div class="list">${tasks.map((t) => reminderRow({ ...t, isTask: true })).join('')}</div>` : ''}
-    <div class="section-title">Documents</div>
+    <div class="section-title">Documents<small class="drop-hint">ou glisse tes fichiers n’importe où sur cette page</small></div>
     ${docs.length ? `<div class="list">${fileRows(docs.map((f) => ({ ...f, name: f.name.slice(f.name.lastIndexOf('/') + 1) })))}</div>` : `<p class="note">Aucun document pour ce cours. Ajoute les supports du prof : ils serviront pour les fiches.</p>`}
     <div class="list" style="margin-top:10px"><a class="row" href="#matiere/${encodeURIComponent(e.subject)}"><span class="lead">${icon('book')}</span><div class="grow"><div class="t">Tous les documents de la matière</div><div class="s">${docCount(e.subject)} documents et fiches</div></div>${icon('chevron-right', 'chev')}</a></div>
     
@@ -1273,19 +1273,68 @@ function transcriptSheet(ev) {
 
 let uploadCtx = null;
 function pickDocs(ctx) { uploadCtx = ctx; $('#picker').click(); }
-$('#picker').onchange = async (ev) => {
+$('#picker').onchange = (ev) => {
   const files = [...ev.target.files]; ev.target.value = '';
+  sendFiles(files, uploadCtx);
+};
+async function sendFiles(files, ctx) {
   let dupes = 0;
   for (const [i, file] of files.entries()) {
     toast(`Envoi ${i + 1}/${files.length}…`, 0);
-    const q = new URLSearchParams({ kind: file.type.startsWith('audio/') || /\.(m4a|mp3|wav|aac)$/i.test(file.name) ? 'audio' : 'doc', subject: uploadCtx.subject, name: file.name, dedupe: 1, ...(uploadCtx.uid ? { uid: uploadCtx.uid } : {}) });
+    const q = new URLSearchParams({ kind: file.type.startsWith('audio/') || /\.(m4a|mp3|wav|aac)$/i.test(file.name) ? 'audio' : 'doc', subject: ctx.subject, name: file.name, dedupe: 1, ...(ctx.uid ? { uid: ctx.uid } : {}) });
     try { const r = await api('/files?' + q, { method: 'POST', body: file, headers: { 'content-type': file.type || 'application/octet-stream' } }); if (r.duplicate) dupes++; }
     catch (e) { return toast(`Échec : ${e.message}`); }
   }
   const added = files.length - dupes;
   toast(dupes ? `${added} ajouté(s) · ${dupes} déjà présent(s), ignoré(s)` : files.length > 1 ? `${files.length} documents ajoutés` : 'Document ajouté', 4000);
   refresh();
-};
+}
+
+// ---------- Glisser-déposer : des fichiers lâchés sur un cours ou une matière y sont rangés ----------
+// Page d'un cours ou d'une matière : toute la page est la cible. Ailleurs : la carte du cours ou la tuile de la matière survolée.
+function dropTarget(el) {
+  const [route, arg] = location.hash.slice(1).split('/').map(decodeURIComponent);
+  const ofEvent = (e) => e && { subject: e.subject, uid: e.uid, label: `${e.subject}, ${dayLabel(e.start).toLowerCase()}` };
+  const ofFile = (f) => (f?.event_uid ? ofEvent(findEvent(f.event_uid)) : null) || (f && { subject: f.subject, label: f.subject });
+  if (route === 'cours' || route === 'transcription') return ofEvent(findEvent(arg));
+  if (route === 'doc' || route === 'fiche') return ofFile(S.files.find((x) => x.id === arg));
+  const card = el.closest?.('a[href^="#cours/"]');
+  if (card) return ofEvent(findEvent(decodeURIComponent(card.getAttribute('href').slice(7))));
+  if (route === 'matiere') return { subject: arg, label: arg };
+  const tile = el.closest?.('a[href^="#matiere/"]');
+  if (tile) { const s = decodeURIComponent(tile.getAttribute('href').slice(9)); return { subject: s, label: s }; }
+  return null;
+}
+{
+  const zone = $('#drop-zone');
+  let timer, lit;
+  const light = (card) => { if (lit !== card) { lit?.classList.remove('drop-on'); card?.classList.add('drop-on'); lit = card; } };
+  const hide = () => { clearTimeout(timer); zone.hidden = true; light(null); };
+  const isFiles = (e) => KEY && [...(e.dataTransfer?.types || [])].includes('Files');
+  addEventListener('dragover', (e) => {
+    if (!isFiles(e)) return;
+    e.preventDefault(); // sinon le navigateur quitte l'app pour ouvrir le fichier
+    const t = dropTarget(e.target);
+    e.dataTransfer.dropEffect = t ? 'copy' : 'none';
+    zone.hidden = false;
+    zone.classList.toggle('none', !t);
+    $('span', zone).textContent = t ? `Déposer dans ${t.label}` : 'Dépose sur un cours ou une matière';
+    light(e.target.closest?.('a[href^="#cours/"], a[href^="#matiere/"]') || null);
+    clearTimeout(timer);
+    timer = setTimeout(hide, 400); // « dragleave » n'est pas fiable d'un navigateur à l'autre : plus de survol = fin du glissé
+  });
+  addEventListener('drop', (e) => {
+    if (!isFiles(e)) return;
+    e.preventDefault();
+    const t = dropTarget(e.target);
+    const items = [...e.dataTransfer.items].filter((i) => i.kind === 'file');
+    const folders = items.filter((i) => i.webkitGetAsEntry?.()?.isDirectory).length;
+    const files = items.filter((i) => !i.webkitGetAsEntry?.()?.isDirectory).map((i) => i.getAsFile()).filter(Boolean);
+    hide();
+    if (folders && !files.length) return toast('Ouvre le dossier et dépose les fichiers qu’il contient', 4000);
+    if (t && files.length) sendFiles(files, t);
+  });
+}
 
 // ---------- Portée d'un DS : les notions au programme ----------
 const parseScope = (t) => { try { return JSON.parse(t?.scope || 'null'); } catch { return null; } };
