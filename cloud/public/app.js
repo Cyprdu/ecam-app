@@ -747,7 +747,7 @@ function barRows(bar) {
 // ---------- Assistant : Claude (abonnement Pro) relié aux cours via le connecteur ----------
 async function linkFor(purpose) {
   const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(purpose + ':' + KEY));
-  return location.origin + `/${purpose === 'mcp' ? 'mcp' : 'up'}/` + [...new Uint8Array(h)].slice(0, 12).map((b) => b.toString(16).padStart(2, '0')).join('');
+  return location.origin + `/${purpose === 'upload' ? 'up' : purpose}/` + [...new Uint8Array(h)].slice(0, 12).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 // Actions de l'assistant : chacune a ses réglages ; une feuille de confirmation montre le message avant d'ouvrir Claude
@@ -1827,6 +1827,33 @@ function expenseSheet(e) {
   });
 }
 
+// Tuto de l'automatisation « Transaction » (Raccourcis) qui envoie chaque paiement Apple Pay vers /pay/
+function applePayGuide() {
+  const step = (n, html) => '<div class="row plain" style="align-items:flex-start"><b style="color:var(--accent);width:22px;flex:none">' + n + '</b><div class="grow" style="white-space:normal">' + html + '</div></div>';
+  openSheet('<h2>Paiements Apple Pay</h2>'
+    + '<p class="note">À faire une seule fois, sur ton iPhone, dans l’app <b>Raccourcis</b>. Ensuite, chaque paiement Apple Pay en magasin s’ajoute tout seul au budget.</p>'
+    + '<div class="list">'
+    + step(1, 'Copie ton lien :<div style="margin-top:8px"><button class="btn secondary" id="p-url">Copier mon lien de paiement</button></div>')
+    + step(2, 'Ouvre <b>Raccourcis</b> → onglet <b>Automatisation</b> → <b>+</b>.')
+    + step(3, 'Cherche <b>Transaction</b> et touche-le. Coche ta carte et laisse les autres choix sur « Tout ».')
+    + step(4, 'Choisis <b>Exécuter immédiatement</b> et désactive <b>Notifier à l’exécution</b>. Touche <b>Suivant</b>, puis <b>Nouvelle automatisation vide</b>.')
+    + step(5, 'Touche <b>Ajouter une action</b>, cherche <b>URL</b> et touche <b>Obtenir le contenu de l’URL</b>. Touche le mot bleu <b>URL</b> et <b>colle</b> ton lien.')
+    + step(6, 'Touche la flèche <b>›</b> du bloc :<br>• <b>Méthode</b> : <b>POST</b><br>• <b>Corps de la requête</b> : <b>JSON</b>')
+    + step(7, 'Touche <b>Ajouter un champ</b> → <b>Texte</b>. Comme clé, écris <b>montant</b>, sans majuscule. Dans la valeur, touche <b>Entrée de raccourci</b> au-dessus du clavier, puis touche ce mot bleu et choisis <b>Montant</b>.')
+    + step(8, 'Ajoute un deuxième champ <b>Texte</b>. Comme clé, écris <b>commercant</b>, sans accent ni majuscule. Comme valeur, prends encore <b>Entrée de raccourci</b> et choisis <b>Commerçant</b>.')
+    + step(9, 'Touche <b>OK</b> en haut à droite. Terminé.')
+    + '</div>'
+    + '<div class="section-title">Vérifier que ça marche</div>'
+    + '<p class="note">Fais un petit achat avec Apple Pay en magasin, puis rouvre le budget : la dépense doit y être. Si l’iPhone demande l’autorisation de se connecter, touche <b>Toujours autoriser</b>.</p>'
+    + '<p class="note"><b>Montant illisible ?</b> Tu reçois une notification, et il suffit de noter la dépense à la main.</p>'
+    + '<p class="note"><b>Mauvaise catégorie ?</b> Corrige-la dans le budget : l’app la reprendra pour ce commerçant.</p>'
+    + '<p class="note"><b>Non détectés :</b> la carte physique, et parfois les achats en ligne. Note-les à la main.</p>'
+    + '<button class="btn" id="p-done">Fermer</button>', (sh) => {
+    $('#p-url', sh).onclick = async () => { await navigator.clipboard.writeText(await linkFor('pay')); toast('Lien copié, colle-le à l’étape 5'); };
+    $('#p-done', sh).onclick = closeSheet;
+  });
+}
+
 function budgetSettingsSheet() {
   const set = budgetSettings();
   const val = (c) => (c / 100).toString().replace('.', ',');
@@ -1836,7 +1863,9 @@ function budgetSettingsSheet() {
     + '<p class="note" id="b-rest"></p>'
     + (NATIVE ? '<div class="list" style="margin:12px 0"><label class="row switch"><div class="grow"><div class="t">Alerte si je suis dans le rouge</div><div class="s">Le lendemain à 9 h, une par jour au plus</div></div><input type="checkbox" id="b-alerts" ' + (set.alerts ? 'checked' : '') + '><i></i></label>'
       + '<label class="row switch"><div class="grow"><div class="t">Rappel du soir</div><div class="s">À 20 h 30 si rien n’est noté dans la journée</div></div><input type="checkbox" id="b-evening" ' + (set.evening ? 'checked' : '') + '><i></i></label></div>' : '')
-    + '<button class="btn" id="b-save">Enregistrer</button>', (sh) => {
+    + '<button class="btn" id="b-save">Enregistrer</button>'
+    + '<button class="btn secondary" id="b-pay" style="margin-top:10px">Ajouter mes paiements Apple Pay automatiquement</button>', (sh) => {
+    $('#b-pay', sh).onclick = applePayGuide;
     const m = $('#b-monthly', sh), f = $('#b-fixed', sh), rest = $('#b-rest', sh);
     const show = () => { const a = parseCents(m.value), b = parseCents(f.value); rest.textContent = a != null && b != null && b <= a ? 'Il te reste ' + euro(a - b) + ' par mois pour le reste.' : 'Les charges fixes doivent être inférieures au budget.'; };
     m.oninput = f.oninput = show; show();

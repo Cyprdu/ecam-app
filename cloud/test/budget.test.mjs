@@ -40,3 +40,26 @@ eq(s.current, false); eq(s.day, 31); eq(s.spent, 3000); eq(s.byCat.Courses, 3000
 eq(c.parseCents('12,50'), 1250); eq(c.parseCents('12.5'), 1250); eq(c.parseCents('7'), 700); eq(c.parseCents(' 3,99 € '), 399); eq(c.parseCents('19,99'), 1999);
 eq(c.parseCents('abc'), null); eq(c.parseCents(''), null); eq(c.parseCents('-4'), null); eq(c.parseCents('1,234'), null);
 console.log('budget OK');
+
+// Paiements Apple Pay : lecture du montant (formats de Raccourcis) et catégorie
+const { parseAmount, categoryOf, recordPayment } = await import('../src/pay.js');
+for (const [raw, cents] of [['12,50 €', 1250], ['12.5', 1250], ['€1,234.50', 123450], ['1 234,50 €', 123450], ['1\u202f234,50\u00a0€', 123450], ['7 €', 700], ['1,234', 123400], [8.9, 890], ['0,99', 99]]) eq(parseAmount(raw), cents);
+for (const raw of ['', null, undefined, 'abc', '0,00', '-12,50 €', '12,50 $', '12.50 USD', '£3']) eq(parseAmount(raw), null);
+eq(categoryOf('CARREFOUR CITY LYON'), 'Courses'); eq(categoryOf('Uber Eats'), 'Resto'); eq(categoryOf('UBER TRIP'), 'Transport'); eq(categoryOf('Barbier du coin'), 'Autre'); eq(categoryOf('Café Terreaux'), 'Resto'); eq(categoryOf(''), 'Autre');
+
+// Enregistrement : catégorie apprise, doublon ignoré, montant illisible signalé par notification
+const rows = new Map(), sent = [];
+const DB = { prepare: (sql) => ({ bind: (...a) => ({
+  first: async () => [...rows.values()].find((r) => r.label === a[0]) || null,
+  run: async () => { if (!rows.has(a[0])) rows.set(a[0], { day: a[1], cents: a[2], category: a[3], label: a[4] }); },
+}) }) };
+const pay = (body, min = '2026-11-05T12:30:10') => recordPayment({ json: async () => body }, { DB, nowParis: min, created: 'x', notify: async (p) => sent.push(p) });
+let r = await pay({ montant: '12,50 €', commercant: 'Carrefour' });
+eq(r.status, 200); eq(r.category, 'Courses'); eq(rows.size, 1);
+await pay({ montant: '12,50 €', commercant: 'Carrefour' }, '2026-11-05T12:30:50'); eq(rows.size, 1); // même minute : doublon
+await pay({ montant: '12,50 €', commercant: 'Carrefour' }, '2026-11-05T12:31:00'); eq(rows.size, 2); // minute suivante : nouvel achat
+[...rows.values()][0].category = 'Sorties';
+eq((await pay({ montant: 5, commercant: 'Carrefour' })).category, 'Sorties'); // correction reprise
+r = await pay({ montant: '12 USD', commercant: 'Amazon' });
+eq(r.status, 400); eq(sent.length, 1); eq(rows.size, 3);
+console.log('OK paiements');
