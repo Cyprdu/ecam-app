@@ -10,3 +10,6 @@ CREATE TABLE IF NOT EXISTS events (uid TEXT PRIMARY KEY, data TEXT);
 CREATE INDEX IF NOT EXISTS files_parent ON files(parent, kind);
 CREATE INDEX IF NOT EXISTS files_subject ON files(subject);
 CREATE INDEX IF NOT EXISTS files_event ON files(event_uid);
+-- Budget étudiant : montants en centimes, identifiant créé par l'app (renvoi sans doublon après une coupure réseau)
+CREATE TABLE IF NOT EXISTS expenses (id TEXT PRIMARY KEY, day TEXT, cents INTEGER, category TEXT, label TEXT, created TEXT);
+CREATE INDEX IF NOT EXISTS expenses_day ON expenses(day);

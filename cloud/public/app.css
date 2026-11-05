@@ -794,3 +794,45 @@ body { font-size: var(--t-body); letter-spacing: 0; line-height: 1.35; }
 .drop-on { box-shadow: inset 0 0 0 2px var(--accent) !important; }
 .drop-hint { display: none; }
 @media (hover: hover) and (pointer: fine) { .drop-hint { display: inline; } }
+
+/* Budget étudiant */
+.month-nav { display: flex; align-items: center; justify-content: space-between; margin: 0 0 12px; }
+.month-nav b { font-size: var(--t-sub); font-weight: 600; text-transform: capitalize; }
+.month-gap { width: 38px; }
+.budget-card { padding: 18px 16px 16px; }
+.budget-hero .k { font-size: var(--t-sub); color: var(--muted); }
+.budget-hero .big { font-size: 44px; font-weight: 700; letter-spacing: -.03em; line-height: 1.12; margin: 2px 0; font-variant-numeric: tabular-nums; }
+.budget-hero .big.neg { color: var(--danger); }
+.budget-hero .s { font-size: var(--t-foot); color: var(--muted); }
+.budget-track { position: relative; margin: 16px 0 6px; }
+.budget-track .me.bad { background: var(--danger); }
+.budget-track .mark { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; border-radius: 2px; background: var(--text); }
+.budget-row { display: flex; justify-content: space-between; gap: 10px; font-size: var(--t-foot); color: var(--muted); font-variant-numeric: tabular-nums; }
+.budget-status { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0 14px; padding: 10px 12px; border-radius: 12px; font-size: 14px; font-weight: 500; }
+.budget-status svg { width: 18px; height: 18px; flex: none; margin-top: 1px; }
+.budget-status.ok { background: var(--ok-soft); color: var(--ok); }
+.budget-status.warn { background: var(--warn-soft); color: var(--warn); }
+.budget-tiles { margin-top: 12px; }
+.budget-tiles .tile { padding: 14px; gap: 3px; }
+.budget-tiles .v { font-size: 21px; }
+.budget-tiles .tile:last-child:nth-child(odd) { grid-column: 1 / -1; }
+.amount-field { display: flex; align-items: baseline; justify-content: center; gap: 6px; margin: 2px 0 14px; }
+.amount-field input { width: 6.2ch; min-width: 0; border: 0; outline: 0; background: none; text-align: right; font-size: 46px; font-weight: 700; letter-spacing: -.03em; font-variant-numeric: tabular-nums; padding: 0; }
+.amount-field span { font-size: 28px; font-weight: 600; color: var(--muted); }
+.budget-cats { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-bottom: 14px; }
+.budget-cats .chip { min-height: 38px; padding: 7px 14px; font-size: 14px; }
+.chart .ref { stroke: var(--subtle); stroke-width: 1.5; stroke-dasharray: 4 4; vector-effect: non-scaling-stroke; }
+.chart .b { fill: var(--accent); stroke: none; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { display: block; width: 14px; }
+.legend .k-ln { height: 2px; border-radius: 2px; background: var(--accent); }
+.legend .k-b { height: 9px; width: 6px; border-radius: 2px 2px 0 0; background: var(--accent); }
+.legend .k-ref { border-top: 1.5px dashed var(--subtle); }
+.hbars { display: grid; gap: 12px; }
+.hbar-top { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; margin-bottom: 5px; }
+.hbar-top span { text-transform: capitalize; }
+.hbar-top b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.hbar .track-bar { height: 6px; }
+.budget-day { display: flex; justify-content: space-between; margin: 14px 4px 6px; font-size: var(--t-foot); color: var(--muted); font-variant-numeric: tabular-nums; }
+.row .amount { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }

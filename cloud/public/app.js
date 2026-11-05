@@ -31,6 +31,7 @@ async function api(path, opts = {}) {
 async function refresh() {
   if (!KEY) return;
   try {
+    await flushBudget(); // d'abord les dépenses notées sans réseau : sinon elles disparaîtraient de l'affichage
     const st = await api('/state');
     if (!st.events) st.events = S.events; // calendrier momentanément indisponible : garder le cache
     else st.calAt = Date.now();
@@ -124,6 +125,11 @@ function closeSheet() {
   setTimeout(() => { if (gen === sheetGen) { sh.hidden = bd.hidden = true; sh.classList.remove('closing'); bd.classList.remove('closing'); sh.style.transition = sh.style.transform = sh.style.opacity = bd.style.transition = bd.style.opacity = ''; } }, 300);
 }
 $('#backdrop').onclick = closeSheet;
+window.visualViewport?.addEventListener('resize', () => {
+  const vv = visualViewport, sh = $('#sheet');
+  sh.style.bottom = sheetDocked() ? Math.max(0, innerHeight - vv.height - vv.offsetTop) + 'px' : '';
+  sh.style.maxHeight = sheetDocked() ? Math.round(vv.height * 0.92) + 'px' : '';
+});
 
 // Glisser la feuille vers le bas pour la fermer : depuis la poignée, ou de n'importe où quand son contenu est tout en haut
 (() => {
@@ -572,7 +578,7 @@ function lineChart(points, label) {
   </div>`;
 }
 function bindCharts(root) {
-  root.querySelectorAll('.chart').forEach((c) => {
+  root.querySelectorAll('.chart[data-points]').forEach((c) => {
     const pts = JSON.parse(c.dataset.points), [W, H, L, R, T, B, lo, hi, t0, t1] = c.dataset.geom.split(',').map(Number);
     const svg = c.querySelector('svg'), cur = c.querySelector('.cursor'), tip = c.querySelector('.tip');
     const x = (d) => L + ((Date.parse(d) - t0) / (t1 - t0 || 1)) * (W - L - R), y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
@@ -709,7 +715,7 @@ function vNote(id) {
 
 // ---------- ECAM (soldes, liens, réglages) ----------
 function vEcam() {
-  if (!S.ecamUser) return vConnect('ECAM', 'Intranet, impression, bar') + `<div style="margin-top:20px"><a class="btn secondary" href="#reglages">${icon('settings')}Réglages de l’app</a></div>`;
+  if (!S.ecamUser) return vConnect('ECAM', 'Intranet, impression, bar') + `<div style="margin-top:20px"><a class="btn secondary" href="#reglages">${icon('settings')}Réglages de l’app</a></div>` + dailyTools();
   const e = S.ecam || {};
   const bar = e.bar || {};
   return `<div class="head"><div><h1>ECAM</h1><div class="sub">${e.at ? 'Mis à jour ' + ago(e.at) : ''}</div></div>
@@ -723,7 +729,7 @@ function vEcam() {
       ${[['mail', 'Messagerie', 'https://espace.ecam.fr/group/tools/mail'], ['book', 'Moodle', 'https://moodle.ecam.fr/'], ['grid', 'Espace intranet', 'https://espace.ecam.fr/'], ['user', 'Trombinoscope', 'https://espace.ecam.fr/group/tools/trombinoscope']]
         .map(([ic, t, u]) => `<a class="row" href="${u}" target="_blank" rel="noopener"><span class="lead">${icon(ic)}</span><div class="grow"><div class="t">${t}</div></div>${icon('external', 'chev')}</a>`).join('')}
     </div>
-    ${bar.history?.length ? `<div class="section-title"><span>Bar — dernières opérations</span><span style="text-transform:none;letter-spacing:0">Solde ${money(bar.balance)}</span></div><div class="list">${barRows(bar)}</div>` : ''}`;
+    ${bar.history?.length ? `<div class="section-title"><span>Bar — dernières opérations</span><span style="text-transform:none;letter-spacing:0">Solde ${money(bar.balance)}</span></div><div class="list">${barRows(bar)}</div>` : ''}` + dailyTools();
 }
 
 // Bar : le site affiche les achats en positif et les recharges en négatif → on inverse (recharge +10 €, boisson −1 €)
@@ -1656,6 +1662,7 @@ function nativeReminders() {
     const time = it.due.slice(11, 16);
     out.push({ id: `${it.key}-${n}`, at: addDays(it.due, -n) + 'T' + hour, url: it.url, title: `${label} · ${it.title}`, body: [it.sub, time !== '00:00' ? time : '', it.place].filter(Boolean).join(' · ') + (it.note ? '\n' + it.note : '') });
   }
+  out.push(...budgetReminders());
   return out.filter((x) => x.at > nowStr()).sort((a, b) => a.at.localeCompare(b.at));
 }
 async function scheduleNative(test) {
@@ -1738,6 +1745,226 @@ async function enablePush() {
   render(false);
 }
 
+// ---------- Budget étudiant ----------
+const BUDGET_CATS = ['Courses', 'Resto', 'Sorties', 'Transport', 'Autre'];
+const euro = (c) => (c / 100).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+const budgetSettings = () => ({ ...BUDGET_DEFAULT, ...S.budget?.settings });
+const budgetExpenses = () => S.budget?.expenses || [];
+const budgetNow = () => budgetStats(budgetSettings(), budgetExpenses(), todayStr().slice(0, 7), todayStr());
+
+// Envois en attente : une dépense notée sans réseau est gardée sur l'appareil et renvoyée dès que possible
+const budgetQueue = () => { try { return JSON.parse(store.get('budgetQueue') || '[]'); } catch { return []; } };
+let budgetFlushing = null;
+function flushBudget() {
+  return (budgetFlushing ||= (async () => {
+    for (let q = budgetQueue(); q.length; q = budgetQueue()) {
+      const op = q[0];
+      try {
+        if (op.del) await api('/budget/expense/' + op.del, { method: 'DELETE' });
+        else await api('/budget/expense', { method: 'POST', json: op.put });
+      } catch (e) { if (e.offline) return; toast(e.message); } // refusée par le serveur : inutile de la renvoyer
+      store.set('budgetQueue', JSON.stringify(budgetQueue().slice(1)));
+    }
+  })().finally(() => { budgetFlushing = null; }));
+}
+function budgetChange(op) {
+  S.budget ||= { settings: null, expenses: [] };
+  const id = op.del || op.put.id;
+  S.budget.expenses = S.budget.expenses.filter((e) => e.id !== id);
+  if (op.put) S.budget.expenses = [op.put, ...S.budget.expenses].sort((a, b) => b.day.localeCompare(a.day));
+  store.set('state', JSON.stringify(S));
+  store.set('budgetQueue', JSON.stringify([...budgetQueue(), op]));
+  flushBudget();
+  if (NATIVE) scheduleNative();
+  render(false);
+}
+// Alertes iPhone : uniquement quand c'est utile (dans le rouge), une par jour au plus ; rappel du soir seulement s'il est activé
+function budgetReminders() {
+  const set = budgetSettings(), out = [], s = budgetNow(), today = todayStr(), tomorrow = addDays(today, 1);
+  if (set.alerts && s.status !== 'ok' && tomorrow.slice(0, 7) === today.slice(0, 7)) {
+    out.push({ id: 'budget-' + tomorrow, at: tomorrow + 'T09:00', url: '/#budget',
+      title: s.status === 'over' ? 'Budget dépassé' : 'Budget dans le rouge',
+      body: s.status === 'over' ? euro(-s.left) + ' au-dessus de ton budget du mois.' : euro(-s.margin) + ' au-dessus du rythme. Vise ' + euro(s.nextDaily) + ' par jour jusqu’à la fin du mois.' });
+  }
+  if (set.evening && !s.spentToday) out.push({ id: 'budget-soir-' + today, at: today + 'T20:30', url: '/#budget', title: 'Tes dépenses du jour', body: 'Rien de noté aujourd’hui : pense à ajouter tes dépenses.' });
+  return out;
+}
+
+function budgetAfterAdd() {
+  const s = budgetNow();
+  if (s.status === 'over') { haptic('warning'); return toast('Budget du mois dépassé de ' + euro(-s.left), 4500); }
+  if (s.status === 'late') { haptic('warning'); return toast('Dans le rouge : vise ' + euro(s.nextDaily) + ' par jour', 4500); }
+  if (s.todayLeft < 0) { haptic('success'); return toast('Il te reste ' + euro(s.nextDaily) + ' par jour à partir de demain', 3500); }
+  haptic('success'); toast('Il te reste ' + euro(s.todayLeft) + ' aujourd’hui', 3000);
+}
+
+function expenseSheet(e) {
+  const isNew = !e;
+  let cat = e?.category || store.get('budgetCat') || 'Courses';
+  openSheet('<h2>' + (isNew ? 'Nouvelle dépense' : 'Modifier la dépense') + '</h2>'
+    + '<label class="amount-field"><input id="x-amount" type="text" inputmode="decimal" enterkeyhint="done" autocomplete="off" placeholder="0,00" aria-label="Montant en euros" value="' + (e ? (e.cents / 100).toFixed(2).replace('.', ',') : '') + '"><span>€</span></label>'
+    + '<div class="chips budget-cats" role="radiogroup" aria-label="Catégorie">' + BUDGET_CATS.map((c) => '<button type="button" class="chip" role="radio" data-cat="' + c + '">' + c + '</button>').join('') + '</div>'
+    + '<button class="btn" id="x-save">' + (isNew ? 'Ajouter' : 'Enregistrer') + '</button>'
+    + '<label class="field" style="margin-top:14px"><span>Note (facultatif)</span><input id="x-label" type="text" enterkeyhint="done" placeholder="Ex. Carrefour" value="' + esc(e?.label || '') + '"></label>'
+    + '<label class="field"><span>Date</span><input id="x-day" type="date" value="' + (e?.day || todayStr()) + '" max="' + todayStr() + '"></label>'
+    + (isNew ? '' : '<button class="btn danger" id="x-del">Supprimer</button>'), (sh) => {
+    const amount = $('#x-amount', sh);
+    const paint = () => sh.querySelectorAll('[data-cat]').forEach((b) => { const on = b.dataset.cat === cat; b.classList.toggle('accent', on); b.setAttribute('aria-checked', on); });
+    paint();
+    sh.querySelectorAll('[data-cat]').forEach((b) => (b.onclick = () => { cat = b.dataset.cat; paint(); haptic('selection'); }));
+    const save = () => {
+      const cents = parseCents(amount.value);
+      if (!cents) { toast('Entre un montant, par exemple 12,50'); return amount.focus(); }
+      if (cents > 1e7) return toast('Montant trop élevé');
+      store.set('budgetCat', cat);
+      budgetChange({ put: { id: e?.id || crypto.randomUUID(), day: $('#x-day', sh).value || todayStr(), cents, category: cat, label: $('#x-label', sh).value.trim() } });
+      closeSheet(); budgetAfterAdd();
+    };
+    $('#x-save', sh).onclick = save;
+    sh.querySelectorAll('input').forEach((i) => (i.onkeydown = (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); save(); } }));
+    if (!isNew) $('#x-del', sh).onclick = () => { budgetChange({ del: e.id }); closeSheet(); toast('Dépense supprimée'); };
+    if (isNew) amount.focus(); // ouvre tout de suite le clavier des chiffres
+  });
+}
+
+function budgetSettingsSheet() {
+  const set = budgetSettings();
+  const val = (c) => (c / 100).toString().replace('.', ',');
+  openSheet('<h2>Réglages du budget</h2>'
+    + '<label class="field"><span>Budget total par mois</span><input id="b-monthly" type="text" inputmode="decimal" value="' + val(set.monthly) + '"></label>'
+    + '<label class="field"><span>Logement et charges fixes</span><input id="b-fixed" type="text" inputmode="decimal" value="' + val(set.fixed) + '"></label>'
+    + '<p class="note" id="b-rest"></p>'
+    + (NATIVE ? '<div class="list" style="margin:12px 0"><label class="row switch"><div class="grow"><div class="t">Alerte si je suis dans le rouge</div><div class="s">Le lendemain à 9 h, une par jour au plus</div></div><input type="checkbox" id="b-alerts" ' + (set.alerts ? 'checked' : '') + '><i></i></label>'
+      + '<label class="row switch"><div class="grow"><div class="t">Rappel du soir</div><div class="s">À 20 h 30 si rien n’est noté dans la journée</div></div><input type="checkbox" id="b-evening" ' + (set.evening ? 'checked' : '') + '><i></i></label></div>' : '')
+    + '<button class="btn" id="b-save">Enregistrer</button>', (sh) => {
+    const m = $('#b-monthly', sh), f = $('#b-fixed', sh), rest = $('#b-rest', sh);
+    const show = () => { const a = parseCents(m.value), b = parseCents(f.value); rest.textContent = a != null && b != null && b <= a ? 'Il te reste ' + euro(a - b) + ' par mois pour le reste.' : 'Les charges fixes doivent être inférieures au budget.'; };
+    m.oninput = f.oninput = show; show();
+    $('#b-save', sh).onclick = async () => {
+      const monthly = parseCents(m.value), fixed = parseCents(f.value);
+      if (monthly == null || fixed == null || fixed > monthly) return toast('Vérifie les montants');
+      const next = { monthly, fixed, alerts: $('#b-alerts', sh)?.checked ?? set.alerts, evening: $('#b-evening', sh)?.checked ?? set.evening };
+      try { await api('/budget/settings', { method: 'POST', json: next }); } catch (e) { return toast(e.message); }
+      S.budget = { expenses: budgetExpenses(), settings: next };
+      store.set('state', JSON.stringify(S));
+      if (NATIVE) scheduleNative();
+      closeSheet(); render(false); toast('Budget enregistré');
+    };
+  });
+}
+
+// Graphique du mois : tes dépenses cumulées face au rythme prévu (trait pointillé, jusqu'au budget du mois)
+function budgetLine(s) {
+  const W = Math.round(Math.min(Math.max(innerWidth - 60, 300), 620)), H = 170, L = 34, R = 10, T = 12, B = 22;
+  const hi = Math.max(s.budget, s.spent, 100);
+  const x = (d) => L + ((d - 1) / Math.max(1, s.days - 1)) * (W - L - R), y = (c) => T + (1 - c / hi) * (H - T - B);
+  const line = s.cumul.map((c, i) => (i ? 'L' : 'M') + x(i + 1).toFixed(1) + ',' + y(c).toFixed(1)).join('');
+  const dates = [1, 10, 20, s.days];
+  const pts = s.cumul.map((c, i) => [x(i + 1), y(c), '<b>' + euro(c) + '</b><small>le ' + (i + 1) + ' · prévu ' + euro(s.daily * (i + 1)) + '</small>']);
+  return '<div class="chart" data-tips="' + esc(JSON.stringify(pts)) + '" data-w="' + W + '" role="img" aria-label="Dépenses cumulées : ' + euro(s.spent) + ' pour ' + euro(s.daily * s.day) + ' prévus à ce jour">'
+    + '<svg viewBox="0 0 ' + W + ' ' + H + '">'
+    + [0, hi / 2, hi].map((c) => '<line class="grid" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(c) + '" y2="' + y(c) + '"/><text class="ax" x="' + (L - 6) + '" y="' + (y(c) + 3.5) + '" text-anchor="end">' + Math.round(c / 100) + ' €</text>').join('')
+    + dates.map((d) => '<text class="ax" x="' + x(d) + '" y="' + (H - 6) + '" text-anchor="middle">' + d + '</text>').join('')
+    + '<line class="ref" x1="' + x(1) + '" y1="' + y(s.daily) + '" x2="' + x(s.days) + '" y2="' + y(s.budget) + '"/>'
+    + (s.cumul.length > 1 ? '<path class="ln" d="' + line + '"/>' : '')
+    + '<circle class="pt" r="4.5" cx="' + x(s.day) + '" cy="' + y(s.spent) + '"/>'
+    + '<g class="cursor" style="display:none"><line class="cx" y1="' + T + '" y2="' + (H - B) + '"/><circle class="pt" r="4.5"/></g>'
+    + '</svg><div class="tip" hidden></div></div>'
+    + '<div class="legend"><span><i class="k-ln"></i>Tes dépenses</span><span><i class="k-ref"></i>Rythme prévu</span></div>';
+}
+// Dépenses par jour : barres fines posées sur la ligne de base, pointillé = montant moyen autorisé
+function budgetBars(s) {
+  const W = Math.round(Math.min(Math.max(innerWidth - 60, 300), 620)), H = 130, L = 34, R = 6, T = 10, B = 20;
+  const hi = Math.max(...s.byDay, s.daily * 1.5, 100), band = (W - L - R) / s.days, bw = Math.max(3, band - 2);
+  const y = (c) => T + (1 - c / hi) * (H - T - B), cx = (i) => L + band * i + band / 2;
+  const bar = (i, c) => { const h = Math.max(2, (H - B) - y(c)), r = Math.min(3, bw / 2, h), l = cx(i) - bw / 2, t = H - B - h; return 'M' + l.toFixed(1) + ',' + (H - B) + 'V' + (t + r).toFixed(1) + 'Q' + l.toFixed(1) + ',' + t.toFixed(1) + ' ' + (l + r).toFixed(1) + ',' + t.toFixed(1) + 'H' + (l + bw - r).toFixed(1) + 'Q' + (l + bw).toFixed(1) + ',' + t.toFixed(1) + ' ' + (l + bw).toFixed(1) + ',' + (t + r).toFixed(1) + 'V' + (H - B) + 'Z'; };
+  const pts = s.byDay.map((c, i) => [cx(i), null, '<b>' + euro(c) + '</b><small>le ' + (i + 1) + '</small>']);
+  return '<div class="chart" data-tips="' + esc(JSON.stringify(pts)) + '" data-w="' + W + '" role="img" aria-label="Dépenses par jour, moyenne autorisée ' + euro(s.daily) + '">'
+    + '<svg viewBox="0 0 ' + W + ' ' + H + '">'
+    + '<line class="grid" x1="' + L + '" x2="' + (W - R) + '" y1="' + (H - B) + '" y2="' + (H - B) + '"/>'
+    + '<text class="ax" x="' + (L - 6) + '" y="' + (y(hi) + 7) + '" text-anchor="end">' + Math.round(hi / 100) + ' €</text>'
+    + s.byDay.map((c, i) => (c ? '<path class="b" d="' + bar(i, c) + '"/>' : '')).join('')
+    + '<line class="ref" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(s.daily) + '" y2="' + y(s.daily) + '"/>'
+    + [1, 10, 20, s.days].map((d) => '<text class="ax" x="' + cx(d - 1) + '" y="' + (H - 5) + '" text-anchor="middle">' + d + '</text>').join('')
+    + '<g class="cursor" style="display:none"><line class="cx" y1="' + T + '" y2="' + (H - B) + '"/></g>'
+    + '</svg><div class="tip" hidden></div></div>'
+    + '<div class="legend"><span><i class="k-b"></i>Par jour</span><span><i class="k-ref"></i>' + euro(s.daily) + ' par jour en moyenne</span></div>';
+}
+const hbars = (rows, max) => '<div class="hbars">' + rows.map(([label, c, note]) => '<div class="hbar"><div class="hbar-top"><span>' + esc(label) + '</span><b>' + euro(c) + (note ? ' <small>' + note + '</small>' : '') + '</b></div><div class="track-bar"><i class="me" style="width:' + Math.min(100, (c / (max || 1)) * 100) + '%"></i></div></div>').join('') + '</div>';
+
+function vBudget(arg) {
+  const today = todayStr(), cur = today.slice(0, 7);
+  const month = /^\d{4}-\d{2}$/.test(arg || '') && arg <= cur ? arg : cur;
+  const set = budgetSettings(), s = budgetStats(set, budgetExpenses(), month, today);
+  const shift = (n) => { const d = new Date(month + '-15T12:00'); d.setMonth(d.getMonth() + n); return d.toLocaleDateString('sv-SE').slice(0, 7); };
+  const label = dFmt(month + '-15', { month: 'long', year: 'numeric' });
+  const pct = s.budget ? Math.min(100, (s.spent / s.budget) * 100) : 100, mark = (s.day / s.days) * 100;
+  const st = s.status === 'over'
+    ? { cls: 'warn', ic: 'x', t: 'Budget dépassé de ' + euro(-s.left) }
+    : s.status === 'late'
+      ? { cls: 'warn', ic: 'clock', t: 'Dans le rouge : ' + euro(-s.margin) + ' au-dessus du rythme' + (s.current && s.days > s.day ? '. Vise ' + euro(s.nextDaily) + ' par jour.' : '.') }
+      : { cls: 'ok', ic: 'check', t: 'Dans le vert : ' + euro(s.margin) + ' d’avance sur le rythme' };
+  const hero = s.current
+    ? '<div class="budget-hero"><span class="k">' + (s.todayLeft >= 0 ? 'Il te reste aujourd’hui' : 'Dépassé aujourd’hui de') + '</span><div class="big ' + (s.todayLeft < 0 && s.status !== 'ok' ? 'neg' : '') + '">' + euro(Math.abs(s.todayLeft)) + '</div><span class="s">' + euro(s.spentToday) + ' dépensés sur ' + euro(s.todayAllowance) + ' possibles aujourd’hui</span></div>'
+    : '<div class="budget-hero"><span class="k">Dépensé en ' + esc(label) + '</span><div class="big">' + euro(s.spent) + '</div><span class="s">sur ' + euro(s.budget) + ' de budget</span></div>';
+  const cats = Object.entries(s.byCat).sort((a, b) => b[1] - a[1]);
+  const totals = {};
+  for (const e of budgetExpenses()) totals[e.day.slice(0, 7)] = (totals[e.day.slice(0, 7)] || 0) + e.cents;
+  const months = Object.keys(totals).sort().slice(-6);
+  const days = [...new Set(s.list.map((e) => e.day))].sort().reverse();
+  return '<a class="back" href="#ecam">' + icon('chevron-left') + 'ECAM</a>'
+    + '<div class="head"><div><h1>Budget</h1><div class="sub">' + euro(s.budget) + ' par mois, logement déduit</div></div><button class="icon-btn" id="b-set" aria-label="Réglages du budget">' + icon('settings') + '</button></div>'
+    + '<div class="month-nav"><a class="icon-btn" href="#budget/' + shift(-1) + '" aria-label="Mois précédent">' + icon('chevron-left') + '</a><b>' + esc(label) + '</b>' + (month < cur ? '<a class="icon-btn" href="#budget/' + shift(1) + '" aria-label="Mois suivant">' + icon('chevron-right') + '</a>' : '<span class="month-gap"></span>') + '</div>'
+    + '<div class="card budget-card">' + hero
+    + '<div class="budget-track" role="img" aria-label="' + euro(s.spent) + ' dépensés sur ' + euro(s.budget) + '"><div class="track-bar"><i class="me ' + (s.status === 'ok' ? '' : 'bad') + '" style="width:' + pct + '%"></i></div>' + (s.current ? '<span class="mark" style="left:' + mark + '%"></span>' : '') + '</div>'
+    + '<div class="budget-row"><span>' + euro(s.spent) + ' dépensés</span><span>' + (s.left >= 0 ? euro(s.left) + ' restants' : 'plus rien') + '</span></div>'
+    + (s.list.length || s.current ? '<div class="budget-status ' + st.cls + '">' + icon(st.ic) + '<span>' + st.t + '</span></div>' : '')
+    + (s.current ? '<button class="btn" id="b-add">' + icon('plus') + 'Ajouter une dépense</button>' : '')
+    + '</div>'
+    + (s.current ? '<div class="tiles budget-tiles">'
+      + '<div class="card tile"><span class="k">Moyenne autorisée</span><span class="v">' + euro(s.daily) + '</span><span class="s">par jour ce mois-ci</span></div>'
+      + '<div class="card tile"><span class="k">À partir de demain</span><span class="v">' + euro(s.nextDaily) + '</span><span class="s">par jour, ' + (s.days - s.day) + ' jour' + (s.days - s.day > 1 ? 's' : '') + ' restant' + (s.days - s.day > 1 ? 's' : '') + '</span></div>'
+      + (s.forecast != null ? '<div class="card tile"><span class="k">Fin de mois prévue</span><span class="v">' + euro(s.forecast) + '</span><span class="s">à ce rythme, sur ' + euro(s.budget) + '</span></div>' : '')
+      + '</div>' : '')
+    + '<div class="section-title">Évolution du mois</div><div class="card avg-card">' + budgetLine(s) + '</div>'
+    + (s.list.length ? '<div class="section-title">Par jour</div><div class="card avg-card">' + budgetBars(s) + '</div>'
+      + '<div class="section-title">Par catégorie</div><div class="card avg-card">' + hbars(cats, cats[0][1]) + '</div>' : '')
+    + (months.length > 1 ? '<div class="section-title">Mois par mois</div><div class="card avg-card">' + hbars(months.map((m) => [dFmt(m + '-15', { month: 'long', year: 'numeric' }), totals[m]]), Math.max(s.budget, ...months.map((m) => totals[m]))) + '</div>' : '')
+    + '<div class="section-title">Dépenses</div>'
+    + (days.length ? days.map((d) => '<p class="budget-day">' + esc(dayLabel(d)) + '<span>' + euro(s.byDay[Number(d.slice(8, 10)) - 1]) + '</span></p><div class="list">' + s.list.filter((e) => e.day === d).map((e) => '<button class="row" data-exp="' + esc(e.id) + '"><div class="grow"><div class="t">' + esc(e.label || e.category) + '</div>' + (e.label ? '<div class="s">' + esc(e.category) + '</div>' : '') + '</div><b class="amount">' + euro(e.cents) + '</b></button>').join('') + '</div>').join('')
+      : '<div class="empty">' + icon('wallet') + '<div>' + (s.current ? 'Aucune dépense ce mois-ci. Ajoute la première pour suivre ton rythme.' : 'Aucune dépense notée ce mois-là.') + '</div></div>');
+}
+function bindBudget(root) {
+  const on = (id, fn) => { const el = $('#' + id, root); if (el) el.onclick = fn; };
+  on('b-add', () => expenseSheet());
+  on('b-set', () => budgetSettingsSheet());
+  root.querySelectorAll('[data-exp]').forEach((b) => (b.onclick = () => expenseSheet(budgetExpenses().find((e) => e.id === b.dataset.exp))));
+  root.querySelectorAll('.chart[data-tips]').forEach((c) => {
+    const pts = JSON.parse(c.dataset.tips), W = +c.dataset.w, svg = c.querySelector('svg'), cur = c.querySelector('.cursor'), tip = c.querySelector('.tip');
+    let last = -1;
+    const show = (ev) => {
+      const r = svg.getBoundingClientRect(), px = ((ev.clientX - r.left) / r.width) * W;
+      let i = 0;
+      pts.forEach((p, k) => { if (Math.abs(p[0] - px) < Math.abs(pts[i][0] - px)) i = k; });
+      const [x, y, html] = pts[i], ln = cur.querySelector('line'), dot = cur.querySelector('circle');
+      cur.style.display = ''; tip.hidden = false;
+      ln.setAttribute('x1', x); ln.setAttribute('x2', x);
+      if (dot) { dot.setAttribute('cx', x); dot.setAttribute('cy', y); }
+      tip.innerHTML = html;
+      tip.style.left = Math.min(Math.max((x / W) * 100, 18), 82) + '%';
+      if (i !== last) { last = i; haptic('selection'); }
+    };
+    const hide = () => { cur.style.display = 'none'; tip.hidden = true; last = -1; };
+    c.onpointerdown = (ev) => { c.setPointerCapture(ev.pointerId); show(ev); };
+    c.onpointermove = (ev) => { if (ev.pointerType === 'mouse' || c.hasPointerCapture(ev.pointerId)) show(ev); };
+    c.onpointerup = c.onpointercancel = c.onpointerleave = hide;
+  });
+}
+const dailyTools = () => {
+  const s = budgetNow();
+  return '<div class="section-title">Au quotidien</div><div class="list"><a class="row" href="#budget"><span class="lead">' + icon('wallet') + '</span><div class="grow"><div class="t">Gestion budget étudiant</div><div class="s">' + (s.todayLeft >= 0 ? 'Il te reste ' + euro(s.todayLeft) + ' aujourd’hui' : 'Dépassé de ' + euro(-s.todayLeft) + ' aujourd’hui') + '</div></div>' + icon('chevron-right', 'chev') + '</a></div>';
+};
+
 // ---------- Routage ----------
 function render(animate = true, anim) {
   const tabbar = $('#tabbar');
@@ -1750,7 +1977,7 @@ function render(animate = true, anim) {
   tabbar.hidden = false;
   const [route, arg] = location.hash.slice(1).split('/').map(decodeURIComponent);
   if (route === 'agenda' && /^\d{4}-\d{2}-\d{2}$/.test(arg || '')) selDay = arg;
-  const tab = { cours: 'agenda', matiere: 'devoirs', matieres: 'devoirs', rappels: 'devoirs', reglages: 'ecam', note: 'notes', fiche: null, doc: null, transcription: null }[route] ?? (route || 'agenda');
+  const tab = { cours: 'agenda', matiere: 'devoirs', matieres: 'devoirs', rappels: 'devoirs', reglages: 'ecam', budget: 'ecam', note: 'notes', fiche: null, doc: null, transcription: null }[route] ?? (route || 'agenda');
   const wide = matchMedia('(min-width: 1024px)').matches;
   tabbar.querySelectorAll('a').forEach((a) => a.classList.toggle('on', a.dataset.tab === (wide && route === 'reglages' ? 'reglages' : tab)));
   moveIndicator();
@@ -1759,8 +1986,8 @@ function render(animate = true, anim) {
   if (route === 'fiche') { if (animate) { vFiche(arg); view.scrollTop = 0; play('push'); } return; }
   if (route === 'doc' || route === 'transcription') { if (animate) { (route === 'doc' ? vDoc : vTranscript)(arg); view.scrollTop = 0; play('push'); } miniPlayer(); return; }
   try {
-    view.innerHTML = route === 'cours' ? vCours(arg) : route === 'matieres' ? vRappels('matieres') : route === 'assistant' ? vAssistant() : route === 'matiere' ? vMatiere(arg) : route === 'rappels' || route === 'devoirs' ? vRappels(arg) : route === 'notes' ? vNotes() : route === 'note' ? vNote(arg) : route === 'ecam' ? vEcam() : route === 'reglages' ? vReglages() : vAgenda();
-    if (animate) { play(/^(cours|matiere|reglages|note)$/.test(route) ? 'push' : 'enter'); view.scrollTop = 0; } else { view.scrollTop = prevScroll; if (anim) play(anim); }
+    view.innerHTML = route === 'cours' ? vCours(arg) : route === 'matieres' ? vRappels('matieres') : route === 'assistant' ? vAssistant() : route === 'matiere' ? vMatiere(arg) : route === 'rappels' || route === 'devoirs' ? vRappels(arg) : route === 'notes' ? vNotes() : route === 'note' ? vNote(arg) : route === 'ecam' ? vEcam() : route === 'reglages' ? vReglages() : route === 'budget' ? vBudget(arg) : vAgenda();
+    if (animate) { play(/^(cours|matiere|reglages|note|budget)$/.test(route) ? 'push' : 'enter'); view.scrollTop = 0; } else { view.scrollTop = prevScroll; if (anim) play(anim); }
     bind(route, arg);
   } catch (err) { // une page qui plante ne doit pas bloquer l'app : on l'explique et on propose de recharger
     console.error(err);
@@ -1883,6 +2110,7 @@ function bindRows(root) {
 function bind(route, arg) {
   bindRows(view);
   bindCharts(view);
+  if (route === 'budget') bindBudget(view);
   if (route === 'cours') bindPlayers(view, coursRecs);
   miniPlayer();
   if (route === 'agenda' || !route) { centerDay(); wheelDays(); pagerTouch(); }
@@ -2019,7 +2247,7 @@ let swipe = null;
 addEventListener('touchstart', (e) => {
   if (NATIVE) return; // dans l'app iPhone, c'est le geste natif d'iOS qui fait le retour
   const t = e.touches[0];
-  swipe = t.clientX < 24 && /^#(cours|matiere|fiche|reglages|note|doc|transcription)/.test(location.hash) ? { x: t.clientX, y: t.clientY } : null;
+  swipe = t.clientX < 24 && /^#(cours|matiere|fiche|reglages|note|doc|transcription|budget)/.test(location.hash) ? { x: t.clientX, y: t.clientY } : null;
 }, { passive: true });
 addEventListener('touchend', (e) => {
   const t = e.changedTouches[0];
