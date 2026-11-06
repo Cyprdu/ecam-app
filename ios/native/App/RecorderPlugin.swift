@@ -37,6 +37,7 @@ public class RecorderPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "alarmPickSound", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "alarmSoundReset", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "theme", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "saveShell", returnType: CAPPluginReturnPromise),
     ]
 
     // ---------- Barre d'onglets native et thème ----------
@@ -52,6 +53,16 @@ public class RecorderPlugin: CAPPlugin, CAPBridgedPlugin {
             (self.bridge?.viewController as? EcamViewController)?.setTheme(call.getString("mode") ?? "auto")
             call.resolve()
         }
+    }
+
+    // ---------- Copie de l'app pour le hors ligne (voir EcamViewController.loadShell) ----------
+    @objc func saveShell(_ call: CAPPluginCall) {
+        guard let html = call.getString("html") else { return call.reject("html manquant") }
+        do {
+            try FileManager.default.createDirectory(at: EcamViewController.shellFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try html.write(to: EcamViewController.shellFile, atomically: true, encoding: .utf8)
+            call.resolve()
+        } catch { call.reject(error.localizedDescription) }
     }
 
     // ---------- Réveil automatique (AlarmKit, iOS 26) ----------

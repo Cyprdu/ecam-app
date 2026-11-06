@@ -14,13 +14,34 @@ let selDay = todayStr();
 let showDone = false;
 
 // ---------- Réseau ----------
+// Ces écritures peuvent attendre le retour du réseau (renvoi sans risque : même identifiant, même contenu)
+const canQueue = (method, path) => (method === 'POST' && (path === '/tasks' || path === '/budget/settings')) || (method === 'DELETE' && path.startsWith('/tasks/'));
+function queueWrite(path, { method, json }) {
+  store.set('budgetQueue', JSON.stringify([...budgetQueue(), { call: { path, method, json } }]));
+  if (path.startsWith('/tasks')) {
+    const id = json?.id || path.slice(7);
+    const i = S.tasks.findIndex((t) => t.id === id);
+    if (method === 'DELETE') { if (i >= 0) S.tasks.splice(i, 1); }
+    else if (i >= 0) S.tasks[i] = json;
+    else S.tasks.push(json);
+    store.set('state', JSON.stringify(S));
+    render(false);
+    dispatchEvent(new Event('ecam-state')); // l'app iPhone reprogramme ses rappels
+  }
+  return { ok: true, id: json?.id, queued: true };
+}
 async function api(path, opts = {}) {
+  const queueable = canQueue(opts.method, path);
+  if (queueable && path === '/tasks') opts.json.id ||= crypto.randomUUID();
+  // Réseau qui ne répond pas (amphi, métro) : on n'attend pas indéfiniment
+  const timeout = opts.timeout || (queueable ? 8000 : 0);
   let res;
   try {
-    res = await fetch('/api' + path, { ...opts, headers: { 'x-key': KEY, ...(opts.json ? { 'content-type': 'application/json' } : {}), ...opts.headers }, body: opts.json ? JSON.stringify(opts.json) : opts.body });
+    res = await fetch('/api' + path, { ...opts, signal: timeout ? AbortSignal.timeout(timeout) : undefined, headers: { 'x-key': KEY, ...(opts.json ? { 'content-type': 'application/json' } : {}), ...opts.headers }, body: opts.json ? JSON.stringify(opts.json) : opts.body });
   } catch {
     // « Failed to fetch » / « Load failed » : pas de réseau (sortie de veille, changement de Wi-Fi…)
     setOffline(true);
+    if (queueable && !opts.noQueue) return queueWrite(path, opts);
     throw Object.assign(new Error('Pas de connexion internet, réessaie'), { offline: true });
   }
   setOffline(false);
@@ -41,6 +62,8 @@ async function refresh() {
     render(false);
     dispatchEvent(new Event('ecam-state')); // l'app iPhone reprogramme ses rappels
     retryIn = 0;
+    saveOfflineShell();
+    prefetchFiches();
   } catch (e) {
     // Mise à jour automatique : jamais de message, on réessaie un peu plus tard (5 s, 15 s, 1 min…)
     retryIn = Math.min((retryIn || 2.5) * 2, 60);
@@ -50,6 +73,42 @@ async function refresh() {
   }
 }
 let retryIn = 0, retryTimer;
+// L'app entière en un seul fichier HTML : l'iPhone la garde et l'affiche quand le site ne répond pas au lancement
+async function buildShell() {
+  const get = async (u) => { const r = await fetch(u, { cache: 'no-cache' }); if (!r.ok) throw new Error(u); return r.text(); };
+  let html = await get('/');
+  const css = await get('/app.css');
+  html = html.replace('<link rel="stylesheet" href="/app.css">', () => '<style>' + css + '</style>');
+  for (const [tag, src] of [...html.matchAll(/<script src="([^"]+)"><\/script>/g)]) {
+    const js = (await get(src)).replace(/<\/script/gi, '<\\/script');
+    html = html.replace(tag, () => '<script>' + js + '</script>');
+  }
+  return html;
+}
+let shellSaved = false;
+async function saveOfflineShell() {
+  if (shellSaved || !NATIVE?.saveShell) return;
+  shellSaved = true;
+  try { await NATIVE.saveShell({ html: await buildShell() }); } catch (e) { console.warn('Copie hors ligne :', e.message); }
+}
+// Fiches lisibles hors ligne, les plus récentes d'abord
+// ponytail: plafond de 2 Mo pour ne pas remplir le stockage de l'app (où sont aussi l'agenda et les notes) ; les fiches au-delà restent lues en ligne
+let fichesBusy = false;
+async function prefetchFiches() {
+  if (fichesBusy) return;
+  fichesBusy = true;
+  try {
+    let used = 0;
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('fiche:')) used += localStorage.getItem(k).length; }
+    const missing = (S.files || []).filter((f) => f.kind === 'fiche' && !store.get('fiche:' + f.id)).sort((a, b) => String(b.created || '').localeCompare(String(a.created || '')));
+    for (const f of missing) {
+      if (used > 2e6) break;
+      const text = await (await api('/files/' + f.id)).text();
+      store.set('fiche:' + f.id, text);
+      used += text.length;
+    }
+  } catch { /* réessayé à la prochaine actualisation */ } finally { fichesBusy = false; }
+}
 function setOffline(off) {
   document.body.classList.toggle('offline', off);
 }
@@ -230,9 +289,18 @@ function schoolStart() {
   return new Date(n.getMonth() >= 7 ? n.getFullYear() : n.getFullYear() - 1, 7, 15);
 }
 
+document.addEventListener('click', async (e) => {
+  if (!e.target.closest('#wish-saint')) return;
+  haptic('selection');
+  const text = 'Joyeuse fête ' + saintOf(selDay).name + ' 🫶🏻';
+  if (navigator.share) return navigator.share({ text }).catch(() => {}); // fermer la feuille de partage n'est pas une erreur
+  await navigator.clipboard.writeText(text);
+  toast('Message copié');
+});
+
 function agendaHead() {
-  const today = todayStr();
-  return `<div class="head"><div><h1>${dayLabel(selDay)}</h1><div class="sub">${dFmt(selDay, { weekday: 'long', day: 'numeric', month: 'long' })}${S.calAt ? ' · à jour ' + new Date(S.calAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : ''}</div></div>
+  const today = todayStr(), fete = saintOf(selDay);
+  return `<div class="head"><div><h1>${dayLabel(selDay)}</h1><div class="sub">${dFmt(selDay, { weekday: 'long', day: 'numeric', month: 'long' })}${S.calAt ? ' · à jour ' + new Date(S.calAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : ''}</div>${fete.saint ? `<div class="saint"><span>${fete.saint}</span>${fete.name ? `<button type="button" class="saint-wish" id="wish-saint">Souhaiter la fête de ${fete.name}</button>` : ''}</div>` : ''}</div>
       <div style="display:flex;gap:8px">
         ${selDay !== today ? `<button class="icon-btn" data-day="${today}" aria-label="Aujourd'hui">${icon('calendar')}</button>` : ''}
         <label class="icon-btn" style="position:relative" aria-label="Aller à une date">${icon('clock')}<input type="date" id="goto-day" value="${selDay}" style="position:absolute;inset:0;opacity:0;width:100%"></label>
@@ -1518,7 +1586,8 @@ const haptic = (style = 'light') => NATIVE?.haptic({ style }).catch(() => {});
 
 async function recordNative(ev) {
   try {
-    await api('/arm', { method: 'POST', json: ev }); // le cours qui recevra l'enregistrement
+    // Le cours qui recevra l'enregistrement. Sans réseau, le serveur le retrouve grâce à la date dans le nom du fichier : ne jamais bloquer le micro
+    await api('/arm', { method: 'POST', json: ev, timeout: 4000 }).catch(() => {});
     await NATIVE.start({ course: ev.subject, uploadUrl: await linkFor('upload') });
     haptic('success');
     recSheet();
@@ -1760,7 +1829,8 @@ function flushBudget() {
     for (let q = budgetQueue(); q.length; q = budgetQueue()) {
       const op = q[0];
       try {
-        if (op.del) await api('/budget/expense/' + op.del, { method: 'DELETE' });
+        if (op.call) await api(op.call.path, { ...op.call, noQueue: true }); // tâches et réglages notés hors ligne
+        else if (op.del) await api('/budget/expense/' + op.del, { method: 'DELETE' });
         else await api('/budget/expense', { method: 'POST', json: op.put });
       } catch (e) { if (e.offline) return; toast(e.message); } // refusée par le serveur : inutile de la renvoyer
       store.set('budgetQueue', JSON.stringify(budgetQueue().slice(1)));
@@ -2080,7 +2150,7 @@ function setDay(day, dir, fade) {
   const head = $('#ag-head');
   if (!head) return render(false);
   head.innerHTML = agendaHead();
-  head.querySelectorAll('h1, .sub').forEach((el) => el.classList.add(dir > 0 ? 'swap-l' : 'swap-r'));
+  head.querySelectorAll('h1, .sub, .saint').forEach((el) => el.classList.add(dir > 0 ? 'swap-l' : 'swap-r'));
   view.querySelectorAll('#days .day').forEach((b) => b.classList.toggle('sel', b.dataset.day === day));
   centerDay(true);
   const track = $('#track');

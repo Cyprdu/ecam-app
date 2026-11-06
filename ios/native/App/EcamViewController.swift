@@ -1,5 +1,6 @@
 import Capacitor
 import UIKit
+import WebKit
 
 // Vue web Capacitor qui charge l'app ECAM (adresse dans Resources/capacitor.config.json)
 // et lui donne accès à l'enregistreur natif : window.Capacitor.Plugins.EcamRecorder
@@ -8,9 +9,21 @@ class EcamViewController: CAPBridgeViewController, UITabBarDelegate {
     static let tabs = [("agenda", "Agenda", "calendar"), ("devoirs", "Devoirs", "checkmark.circle"), ("assistant", "Assistant", "sparkles"),
                        ("notes", "Notes", "rosette"), ("ecam", "ECAM", "square.grid.2x2")]
     let tabBar = UITabBar()
+    // Copie de l'app enregistrée par la partie web à chaque ouverture en ligne
+    static let shellFile = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("offline-shell.html")
+    private var offlineNav: OfflineNavigation?
 
     override func capacitorDidLoad() {
         bridge?.registerPluginInstance(RecorderPlugin())
+        // Site injoignable (avion, pas de réseau) ou qui ne répond pas après 6 s : on affiche la copie de l'app
+        if let web = webView {
+            let nav = OfflineNavigation(next: web.navigationDelegate) { [weak self] in self?.loadShell() }
+            offlineNav = nav
+            web.navigationDelegate = nav
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
+            if self?.webView?.isLoading == true { self?.loadShell() }
+        }
         // Comportement iOS : glisser depuis le bord gauche = retour, pas de rebond de la page entière
         webView?.allowsBackForwardNavigationGestures = true
         webView?.scrollView.bounces = false
@@ -34,6 +47,14 @@ class EcamViewController: CAPBridgeViewController, UITabBarDelegate {
             tabBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             tabBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
+    }
+
+    // Même adresse que le site : la page garde ses données (clé, agenda…) et ses appels au serveur remarchent dès le retour du réseau
+    func loadShell() {
+        guard let web = webView, let html = try? String(contentsOf: Self.shellFile, encoding: .utf8),
+              let url = URL(string: "https://ecam-app.cyprien-veyret.workers.dev/") else { return }
+        web.stopLoading()
+        web.loadSimulatedRequest(URLRequest(url: url), responseHTML: html)
     }
 
     func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
@@ -60,4 +81,23 @@ class EcamViewController: CAPBridgeViewController, UITabBarDelegate {
 
 private extension UITabBarItem {
     func tagged(_ t: Int) -> UITabBarItem { tag = t; return self }
+}
+
+// Laisse Capacitor gérer la navigation et signale seulement l'échec du chargement de la page
+final class OfflineNavigation: NSObject, WKNavigationDelegate {
+    private weak var next: WKNavigationDelegate?
+    private let onFail: () -> Void
+
+    init(next: WKNavigationDelegate?, onFail: @escaping () -> Void) {
+        self.next = next
+        self.onFail = onFail
+    }
+
+    override func responds(to aSelector: Selector!) -> Bool { super.responds(to: aSelector) || next?.responds(to: aSelector) == true }
+    override func forwardingTarget(for aSelector: Selector!) -> Any? { next }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        next?.webView?(webView, didFailProvisionalNavigation: navigation, withError: error)
+        if (error as NSError).code != NSURLErrorCancelled { onFail() } // « annulé » : c'est nous, ou l'utilisateur
+    }
 }
