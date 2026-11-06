@@ -117,6 +117,8 @@ main.push { animation: push .32s var(--ease); }
 .pager { overflow: hidden; margin: 0 -18px; touch-action: pan-y; }
 .track { display: flex; align-items: flex-start; width: 300%; transform: translateX(-33.3333%); will-change: transform; }
 .pane { width: 33.3333%; flex: none; padding: 0 18px; min-height: 40vh; }
+#ag-head .saint.swap-l { animation: swapL .28s var(--ease) both; }
+#ag-head .saint.swap-r { animation: swapR .28s var(--ease) both; }
 #ag-head h1.swap-l, #ag-head .sub.swap-l { animation: swapL .28s var(--ease) both; }
 #ag-head h1.swap-r, #ag-head .sub.swap-r { animation: swapR .28s var(--ease) both; }
 #ag-head .sub.swap-l, #ag-head .sub.swap-r { animation-delay: .03s; } /* la date suit le titre, en léger décalé */
@@ -836,3 +838,8 @@ body { font-size: var(--t-body); letter-spacing: 0; line-height: 1.35; }
 .hbar .track-bar { height: 6px; }
 .budget-day { display: flex; justify-content: space-between; margin: 14px 4px 6px; font-size: var(--t-foot); color: var(--muted); font-variant-numeric: tabular-nums; }
 .row .amount { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Fête du jour, sous la date de l'agenda */
+.saint { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 8px; font-size: 14px; color: var(--muted); }
+.saint-wish { min-height: 32px; padding: 5px 12px; border: 0; border-radius: 999px; background: var(--fill); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; text-align: left; }
+.saint-wish:active { opacity: .6; }
