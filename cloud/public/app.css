@@ -843,3 +843,26 @@ body { font-size: var(--t-body); letter-spacing: 0; line-height: 1.35; }
 .saint { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 8px; font-size: 14px; color: var(--muted); }
 .saint-wish { min-height: 32px; padding: 5px 12px; border: 0; border-radius: 999px; background: var(--fill); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; text-align: left; }
 .saint-wish:active { opacity: .6; }
+
+/* Lectures de la messe et Bible : texte long, confortable à lire */
+.reading { font-size: 17px; line-height: 1.6; color: var(--text); margin: 0 4px 8px; }
+.reading p { margin: 0 0 .7em; }
+.reading .ref { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+.reading .intro { font-style: italic; color: var(--muted); }
+.reading .titre { font-weight: 600; }
+.reading .refrain { margin: 0 0 .9em; padding-left: 12px; border-left: 3px solid var(--accent); }
+.reading sup { font-size: 11px; font-weight: 600; color: var(--muted); margin-right: 2px; }
+.sheet button.back { border: 0; background: none; font: inherit; cursor: pointer; }
+
+/* Billets de cinéma, façon Wallet : cartes empilées, QR en grand dans la feuille */
+.wallet { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+.pass, .pass-sheet { display: block; width: 100%; border: 0; border-radius: 18px; padding: 18px 20px; text-align: left; font: inherit; color: #1a1a1a; background: linear-gradient(135deg, #ffd34d, #f5a623); box-shadow: 0 6px 18px rgba(0, 0, 0, .18); cursor: pointer; }
+.pass:active { transform: scale(.98); }
+.pass-top { display: flex; justify-content: space-between; align-items: baseline; }
+.pass-brand { font-size: 20px; font-weight: 800; letter-spacing: -.02em; }
+.pass-kind { font-size: 13px; font-weight: 600; opacity: .75; }
+.pass-code { margin-top: 22px; font: 600 22px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; }
+.pass-until { margin-top: 4px; font-size: 13px; opacity: .75; }
+.pass-sheet { cursor: default; box-shadow: none; text-align: center; margin-bottom: 12px; }
+.pass-sheet .pass-code { margin-top: 12px; }
+.pass-qr { stroke: none; stroke-width: 0; display: block; width: min(72vw, 280px); height: auto; margin: 18px auto 0; border-radius: 12px; }

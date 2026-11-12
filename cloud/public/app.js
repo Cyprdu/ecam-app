@@ -15,7 +15,7 @@ let showDone = false;
 
 // ---------- Réseau ----------
 // Ces écritures peuvent attendre le retour du réseau (renvoi sans risque : même identifiant, même contenu)
-const canQueue = (method, path) => (method === 'POST' && (path === '/tasks' || path === '/budget/settings')) || (method === 'DELETE' && path.startsWith('/tasks/'));
+const canQueue = (method, path) => (method === 'POST' && (path === '/tasks' || path === '/budget/settings' || path === '/bible/progress' || path === '/tickets/used')) || (method === 'DELETE' && path.startsWith('/tasks/'));
 function queueWrite(path, { method, json }) {
   store.set('budgetQueue', JSON.stringify([...budgetQueue(), { call: { path, method, json } }]));
   if (path.startsWith('/tasks')) {
@@ -174,6 +174,7 @@ function openSheet(html, onMount) {
   onMount?.(sh);
 }
 function closeSheet() {
+  ticketLight(false);
   const sh = $('#sheet'), bd = $('#backdrop');
   if (sh.hidden || sh.classList.contains('closing')) return;
   const gen = sheetGen;
@@ -302,6 +303,7 @@ function agendaHead() {
   const today = todayStr(), fete = saintOf(selDay);
   return `<div class="head"><div><h1>${dayLabel(selDay)}</h1><div class="sub">${dFmt(selDay, { weekday: 'long', day: 'numeric', month: 'long' })}${S.calAt ? ' · à jour ' + new Date(S.calAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : ''}</div>${fete.saint ? `<div class="saint"><span>${fete.saint}</span>${fete.name ? `<button type="button" class="saint-wish" id="wish-saint">Souhaiter la fête de ${fete.name}</button>` : ''}</div>` : ''}</div>
       <div style="display:flex;gap:8px">
+        <button class="icon-btn" id="open-spirit" aria-label="Lectures et prière">${icon('pray')}</button>
         ${selDay !== today ? `<button class="icon-btn" data-day="${today}" aria-label="Aujourd'hui">${icon('calendar')}</button>` : ''}
         <label class="icon-btn" style="position:relative" aria-label="Aller à une date">${icon('clock')}<input type="date" id="goto-day" value="${selDay}" style="position:absolute;inset:0;opacity:0;width:100%"></label>
       </div></div>`;
@@ -2061,7 +2063,8 @@ function bindBudget(root) {
 }
 const dailyTools = () => {
   const s = budgetNow();
-  return '<div class="section-title">Au quotidien</div><div class="list"><a class="row" href="#budget"><span class="lead">' + icon('wallet') + '</span><div class="grow"><div class="t">Gestion budget étudiant</div><div class="s">' + (s.todayLeft >= 0 ? 'Il te reste ' + euro(s.todayLeft) + ' aujourd’hui' : 'Dépassé de ' + euro(-s.todayLeft) + ' aujourd’hui') + '</div></div>' + icon('chevron-right', 'chev') + '</a></div>';
+  return '<div class="section-title">Au quotidien</div><div class="list"><a class="row" href="#budget"><span class="lead">' + icon('wallet') + '</span><div class="grow"><div class="t">Gestion budget étudiant</div><div class="s">' + (s.todayLeft >= 0 ? 'Il te reste ' + euro(s.todayLeft) + ' aujourd’hui' : 'Dépassé de ' + euro(-s.todayLeft) + ' aujourd’hui') + '</div></div>' + icon('chevron-right', 'chev') + '</a></div>'
+    + (S.tickets?.length ? '<div class="section-title">Cinéma</div><div class="list"><a class="row" href="#cinema"><span class="lead">' + icon('ticket') + '</span><div class="grow"><div class="t">Billets Pathé</div><div class="s">' + S.tickets.length + (S.tickets.length > 1 ? ' billets valables' : ' billet valable') + '</div></div>' + icon('chevron-right', 'chev') + '</a></div>' : '');
 };
 
 // ---------- Routage ----------
@@ -2076,7 +2079,7 @@ function render(animate = true, anim) {
   tabbar.hidden = false;
   const [route, arg] = location.hash.slice(1).split('/').map(decodeURIComponent);
   if (route === 'agenda' && /^\d{4}-\d{2}-\d{2}$/.test(arg || '')) selDay = arg;
-  const tab = { cours: 'agenda', matiere: 'devoirs', matieres: 'devoirs', rappels: 'devoirs', reglages: 'ecam', budget: 'ecam', note: 'notes', fiche: null, doc: null, transcription: null }[route] ?? (route || 'agenda');
+  const tab = { cours: 'agenda', matiere: 'devoirs', matieres: 'devoirs', rappels: 'devoirs', reglages: 'ecam', budget: 'ecam', cinema: 'ecam', note: 'notes', fiche: null, doc: null, transcription: null }[route] ?? (route || 'agenda');
   const wide = matchMedia('(min-width: 1024px)').matches;
   tabbar.querySelectorAll('a').forEach((a) => a.classList.toggle('on', a.dataset.tab === (wide && route === 'reglages' ? 'reglages' : tab)));
   moveIndicator();
@@ -2085,7 +2088,7 @@ function render(animate = true, anim) {
   if (route === 'fiche') { if (animate) { vFiche(arg); view.scrollTop = 0; play('push'); } return; }
   if (route === 'doc' || route === 'transcription') { if (animate) { (route === 'doc' ? vDoc : vTranscript)(arg); view.scrollTop = 0; play('push'); } miniPlayer(); return; }
   try {
-    view.innerHTML = route === 'cours' ? vCours(arg) : route === 'matieres' ? vRappels('matieres') : route === 'assistant' ? vAssistant() : route === 'matiere' ? vMatiere(arg) : route === 'rappels' || route === 'devoirs' ? vRappels(arg) : route === 'notes' ? vNotes() : route === 'note' ? vNote(arg) : route === 'ecam' ? vEcam() : route === 'reglages' ? vReglages() : route === 'budget' ? vBudget(arg) : vAgenda();
+    view.innerHTML = route === 'cours' ? vCours(arg) : route === 'matieres' ? vRappels('matieres') : route === 'assistant' ? vAssistant() : route === 'matiere' ? vMatiere(arg) : route === 'rappels' || route === 'devoirs' ? vRappels(arg) : route === 'notes' ? vNotes() : route === 'note' ? vNote(arg) : route === 'ecam' ? vEcam() : route === 'reglages' ? vReglages() : route === 'budget' ? vBudget(arg) : route === 'cinema' ? vCinema() : vAgenda();
     if (animate) { play(/^(cours|matiere|reglages|note|budget)$/.test(route) ? 'push' : 'enter'); view.scrollTop = 0; } else { view.scrollTop = prevScroll; if (anim) play(anim); }
     bind(route, arg);
   } catch (err) { // une page qui plante ne doit pas bloquer l'app : on l'explique et on propose de recharger
@@ -2377,3 +2380,132 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) pend
 render();
 refresh();
 setInterval(() => { if (!document.hidden && S.jobs.some((j) => j.status !== 'done' && j.status !== 'failed')) refresh(); }, 30_000);
+
+// ---------- Spirituel : lectures de la messe (AELF) et plan de lecture de la Bible ----------
+document.addEventListener('click', (e) => { if (e.target.closest('#open-spirit')) { haptic('selection'); spiritSheet(selDay); } });
+
+// Sans progression enregistrée : le plan est supposé suivi jusqu'à hier
+const bibleDone = () => S.bible?.done ?? Math.max(0, bibleDue(todayStr()) - 1);
+function bibleState(done = bibleDone()) {
+  const late = bibleDue(todayStr()) - done - 1;
+  if (done >= BIBLE_PLAN.length) return 'Plan terminé';
+  return late > 0 ? late + (late > 1 ? ' jours' : ' jour') + ' de retard' : late < 0 ? 'Lecture du jour faite' : 'À lire aujourd’hui';
+}
+function saveBible(done) {
+  S.bible = { done };
+  store.set('state', JSON.stringify(S));
+  return api('/bible/progress', { method: 'POST', json: { done } }); // sans réseau : envoyé au retour
+}
+// Textes gardés sur l'appareil (lecture hors ligne) ; seuls ceux du moment, pour ne pas remplir le stockage
+async function keptJson(key, path, prefix, keepFrom) {
+  const hit = store.get(key);
+  if (hit) return JSON.parse(hit);
+  const data = await api(path);
+  try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k.startsWith(prefix) && k < keepFrom) localStorage.removeItem(k); } } catch {}
+  store.set(key, JSON.stringify(data));
+  return data;
+}
+const back = (id) => '<button type="button" class="back" id="' + id + '">' + icon('chevron-left') + 'Retour</button>';
+
+function spiritSheet(day) {
+  const done = bibleDone();
+  openSheet('<h2>Spirituel</h2><div class="list">'
+    + '<button class="row" id="sp-aelf"><span class="lead">' + icon('sun') + '</span><div class="grow"><div class="t">Lectures du jour</div><div class="s">' + (day === todayStr() ? 'Messe d’aujourd’hui' : 'Messe du ' + longDay(day)) + '</div></div>' + icon('chevron-right', 'chev') + '</button>'
+    + '<button class="row" id="sp-plan"><span class="lead">' + icon('book') + '</span><div class="grow"><div class="t">Lire la Bible' + (BIBLE_PLAN[done] ? ' : ' + esc(BIBLE_PLAN[done]) : '') + '</div><div class="s">Plan de lecture · ' + bibleState(done) + '</div></div>' + icon('chevron-right', 'chev') + '</button>'
+    + '</div>', (sh) => {
+    $('#sp-aelf', sh).onclick = () => lecturesSheet(day);
+    $('#sp-plan', sh).onclick = () => bibleSheet(day);
+  });
+}
+
+function lecturesSheet(day) {
+  openSheet(back('sp-back') + '<h2>Lectures du jour</h2><div id="aelf"><p class="note">Chargement…</p></div>', async (sh) => {
+    $('#sp-back', sh).onclick = () => spiritSheet(day);
+    const box = $('#aelf', sh);
+    try {
+      const m = await keptJson('aelf:' + day, '/aelf/' + day, 'aelf:', 'aelf:' + addDays(todayStr(), -3));
+      if (!box.isConnected) return;
+      box.innerHTML = '<p class="note">' + esc(m.jour) + (m.messe ? ' · ' + esc(m.messe) : '') + '</p>'
+        + m.lectures.map((l) => '<div class="section-title">' + esc(l.label) + '</div><div class="reading">'
+          + '<div class="ref">' + esc(l.ref) + '</div>'
+          + (l.intro ? '<p class="intro">' + esc(l.intro) + '</p>' : '') + (l.titre ? '<p class="titre">' + esc(l.titre) + '</p>' : '')
+          + (l.refrain ? '<div class="refrain">' + l.refrain + '</div>' : '') + (l.verset ? '<div class="refrain">' + l.verset + '</div>' : '')
+          + l.html + '</div>').join('')
+        + '<p class="note">Textes liturgiques © AELF</p>';
+    } catch (e) { box.innerHTML = '<p class="note">' + esc(e.message) + '</p>'; }
+  });
+}
+
+function bibleSheet(day) {
+  if (!S.bible) saveBible(bibleDone()).catch(() => {}); // première ouverture : le décalage part d'ici
+  const done = bibleDone(), step = BIBLE_PLAN[done];
+  if (!step) return openSheet(back('sp-back') + '<div class="empty">' + icon('check') + '<b>Plan terminé</b><div class="note">Tu as lu toute la Bible.</div></div>', (sh) => { $('#sp-back', sh).onclick = () => spiritSheet(day); });
+  openSheet(back('sp-back') + '<h2>' + esc(step) + '</h2><p class="note">Étape ' + (done + 1) + ' sur ' + BIBLE_PLAN.length + ' · ' + bibleState(done) + '</p><div id="bible"><p class="note">Chargement…</p></div>', async (sh) => {
+    $('#sp-back', sh).onclick = () => spiritSheet(day);
+    const box = $('#bible', sh), chs = bibleChapters(step);
+    try {
+      const texts = await Promise.all(chs.map((c) => keptJson('bible:' + String(done).padStart(3, '0') + ':' + c.book + '/' + c.chap, '/bible/' + c.book + '/' + c.chap, 'bible:', 'bible:' + String(done).padStart(3, '0'))));
+      if (!box.isConnected) return;
+      box.innerHTML = chs.map((c, i) => (chs.length > 1 ? '<div class="section-title">' + esc(c.title) + '</div>' : '')
+        + '<div class="reading">' + texts[i].verses.map(([n, t]) => '<p><sup>' + esc(n) + '</sup> ' + esc(t) + '</p>').join('') + '</div>').join('')
+        + '<p class="note">Bible de la liturgie © AELF</p><button class="btn" id="bible-done">Marquer comme lu</button>';
+      $('#bible-done', sh).onclick = () => {
+        haptic('success');
+        saveBible(done + 1).catch((e) => toast(e.message));
+        const next = BIBLE_PLAN[done + 1], late = bibleDue(todayStr()) - done - 2;
+        openSheet('<div class="empty">' + icon('check') + '<b>' + esc(step) + ' : lu</b><div class="note">' + (next ? 'Ensuite : ' + esc(next) + (late > 0 ? ' · encore ' + late + (late > 1 ? ' jours' : ' jour') + ' de retard' : '') : 'Plan terminé') + '</div></div>'
+          + (next ? '<button class="btn' + (late > 0 ? '' : ' secondary') + '" id="bible-next">' + (late > 0 ? 'Lire la suite maintenant' : 'Lire en avance') + '</button>' : '')
+          + '<button class="btn' + (late > 0 ? ' secondary' : '') + '" id="bible-close" style="margin-top:10px">Fermer</button>', (s2) => {
+          if (next) $('#bible-next', s2).onclick = () => bibleSheet(day);
+          $('#bible-close', s2).onclick = closeSheet;
+        });
+      };
+    } catch (e) { box.innerHTML = '<p class="note">' + esc(e.message) + '</p>'; }
+  });
+}
+
+// ---------- Billets de cinéma : un portefeuille de QR codes à présenter en caisse ----------
+const ticketQr = (t, cls) => '<svg class="' + cls + '" viewBox="-2 -2 ' + (t.n + 4) + ' ' + (t.n + 4) + '" shape-rendering="crispEdges" role="img" aria-label="QR code du billet ' + esc(t.code) + '"><rect x="-2" y="-2" width="' + (t.n + 4) + '" height="' + (t.n + 4) + '" fill="#fff"/><path d="' + t.qr + '" fill="#000"/></svg>';
+const untilLabel = (d) => 'Valable jusqu’au ' + dFmt(d, { day: 'numeric', month: 'long', year: 'numeric' });
+function vCinema() {
+  const list = [...(S.tickets || [])].sort((x, y) => x.until.localeCompare(y.until));
+  return '<a class="back" href="#ecam">' + icon('chevron-left') + 'ECAM</a><div class="head"><div><h1>Billets Pathé</h1><div class="sub">' + (list.length ? list.length + (list.length > 1 ? ' billets valables · touche un billet pour le scanner' : ' billet valable · touche-le pour le scanner') : 'Aucun billet') + '</div></div></div>'
+    + (list.length ? '<div class="wallet">' + list.map((t) => '<button class="pass" data-ticket="' + esc(t.code) + '"><div class="pass-top"><span class="pass-brand">Pathé</span><span class="pass-kind">' + esc(t.kind) + '</span></div><div class="pass-code">' + esc(t.code) + '</div><div class="pass-until">' + untilLabel(t.until) + '</div></button>').join('') + '</div>'
+      : '<div class="empty">' + icon('ticket') + '<div>Tous tes billets ont été utilisés</div></div>');
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-ticket]');
+  if (!b) return;
+  const t = S.tickets.find((x) => x.code === b.dataset.ticket);
+  if (!t) return;
+  haptic('selection');
+  openSheet('<div class="pass-sheet"><div class="pass-top"><span class="pass-brand">Pathé</span><span class="pass-kind">' + esc(t.kind) + '</span></div>' + ticketQr(t, 'pass-qr')
+    + '<div class="pass-code">' + esc(t.code) + '</div><div class="pass-until">' + untilLabel(t.until) + (t.pin ? ' · code PIN ' + esc(t.pin) : '') + '</div></div>'
+    + '<p class="note" style="text-align:center">Monte la luminosité de l’écran pour la borne ou la caisse.</p>'
+    + '<button class="btn secondary" id="t-used">Marquer comme utilisé</button>', (sh) => {
+    ticketLight(true);
+    const btn = $('#t-used', sh);
+    btn.onclick = () => {
+      // Deux touches : un billet retiré par erreur ne réapparaîtrait pas
+      if (!btn.dataset.sure) { btn.dataset.sure = 1; btn.className = 'btn danger'; btn.textContent = 'Confirmer : billet utilisé'; haptic('selection'); return; }
+      S.tickets = S.tickets.filter((x) => x !== t);
+      store.set('state', JSON.stringify(S));
+      api('/tickets/used', { method: 'POST', json: { code: t.code } }).catch((err) => toast(err.message));
+      haptic('success');
+      closeSheet();
+      render(false);
+      toast('Billet retiré de la liste');
+    };
+  });
+});
+
+let ticketBright = false;
+function ticketLight(on) {
+  if (on === ticketBright) return;
+  ticketBright = on;
+  NATIVE?.brightness?.({ max: on }).catch(() => {});
+}
+document.addEventListener('visibilitychange', () => {
+  if (!ticketBright) return;
+  NATIVE?.brightness?.({ max: !document.hidden }).catch(() => {});
+});

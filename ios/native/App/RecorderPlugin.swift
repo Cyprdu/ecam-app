@@ -37,6 +37,7 @@ public class RecorderPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "alarmPickSound", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "alarmSoundReset", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "theme", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "brightness", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "saveShell", returnType: CAPPluginReturnPromise),
     ]
 
@@ -51,6 +52,22 @@ public class RecorderPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func theme(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             (self.bridge?.viewController as? EcamViewController)?.setTheme(call.getString("mode") ?? "auto")
+            call.resolve()
+        }
+    }
+
+    // ---------- Luminosité au maximum pendant qu'un billet est affiché (comme Wallet), puis celle d'avant ----------
+    private var savedBrightness: CGFloat?
+    @objc func brightness(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            guard let screen = self.bridge?.viewController?.view.window?.windowScene?.screen else { return call.resolve() }
+            if call.getBool("max") == true {
+                if self.savedBrightness == nil { self.savedBrightness = screen.brightness }
+                screen.brightness = 1
+            } else if let before = self.savedBrightness {
+                screen.brightness = before
+                self.savedBrightness = nil
+            }
             call.resolve()
         }
     }
