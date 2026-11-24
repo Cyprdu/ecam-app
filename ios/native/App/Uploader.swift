@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import UserNotifications
 
 // File d'envoi des enregistrements (Documents/À envoyer) : un fichier n'est supprimé du téléphone qu'une fois
@@ -15,6 +16,24 @@ final class Uploader: NSObject, URLSessionDataDelegate {
         return url
     }
 
+    // App ouverte : envoi direct, immédiat et visible. App fermée ou écran verrouillé : envoi confié à iOS (session
+    // d'arrière-plan), qui peut attendre longtemps — d'où des « envoi en cours » qui n'avançaient pas.
+    private lazy var live: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.waitsForConnectivity = false
+        config.timeoutIntervalForRequest = 60
+        config.httpMaximumConnectionsPerHost = 1
+        return URLSession(configuration: config, delegate: self, delegateQueue: nil)
+    }()
+    private let lock = DispatchQueue(label: "fr.cyprien.ecam.uploader") // protège tout l'état ci-dessous
+    private var inFlight = Set<String>()        // noms des fichiers en cours d'envoi : jamais deux envois du même fichier
+    private var progress: [String: Double] = [:]
+    private var errors: [String: String] = [:]  // dernière erreur, montrée dans l'app
+    private var tries: [String: Int] = [:]
+    private var bodies: [URLSessionTask: Data] = [:]
+    private var scanning = false
+    private var rescan = false
+
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.background(withIdentifier: "fr.cyprien.ecam.upload")
         config.sessionSendsLaunchEvents = true
@@ -25,17 +44,18 @@ final class Uploader: NSObject, URLSessionDataDelegate {
     private func infoURL(_ file: URL) -> URL { file.appendingPathExtension("json") }
 
     // Copie de sécurité : un enregistrement envoyé reste 5 jours dans « Envoyés » (app Fichiers › ECAM),
-    // un enregistrement refusé par le serveur va dans « Non envoyés » et n'est jamais effacé.
+    // un enregistrement refusé reste dans la file et est réessayé (« Non envoyés » : ancienne version, revidé dans la file).
     static func folder(_ name: String) -> URL {
         let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(name, isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
     private func keep(_ path: String, in name: String) {
+        guard FileManager.default.fileExists(atPath: path) else { return }
         let fm = FileManager.default, src = URL(fileURLWithPath: path)
         let dest = Uploader.folder(name).appendingPathComponent(src.lastPathComponent)
         try? fm.removeItem(at: dest)
-        if (try? fm.moveItem(at: src, to: dest)) == nil { try? fm.removeItem(at: src) }
+        if (try? fm.moveItem(at: src, to: dest)) == nil { return }
         try? fm.removeItem(at: infoURL(src))
     }
     private func purgeSent() {
@@ -58,16 +78,78 @@ final class Uploader: NSObject, URLSessionDataDelegate {
     /// Envoie tout ce qui attend dans la file et n'est pas déjà en cours d'envoi.
     func resumePending(uploadURL: URL? = nil) {
         if let uploadURL { UserDefaults.standard.set(uploadURL.absoluteString, forKey: "uploadURL") }
-        let fallback = UserDefaults.standard.string(forKey: "uploadURL").flatMap(URL.init)
-        purgeSent()
-        session.getAllTasks { tasks in
-            let busy = Set(tasks.filter { $0.state == .running || $0.state == .suspended }.compactMap { $0.taskDescription?.components(separatedBy: "|").first })
-            for file in self.queued() where !busy.contains(file.path) {
-                let meta = (try? JSONSerialization.jsonObject(with: Data(contentsOf: self.infoURL(file)))) as? [String: String] ?? [:]
-                guard let target = (meta["url"]).flatMap(URL.init) ?? fallback else { continue } // lien inconnu : l'app le donnera à l'ouverture
-                self.send(file: file, to: target, course: meta["course"] ?? "", name: meta["name"], mime: meta["mime"])
+        DispatchQueue.main.async {
+            let active = UIApplication.shared.applicationState == .active
+            self.lock.async {
+                // Un seul passage à la fois : deux passages simultanés envoyaient le même fichier en double
+                if self.scanning { self.rescan = true; return }
+                self.scanning = true
+                self.purgeSent()
+                self.requeueRefused()
+                self.session.getAllTasks { tasks in self.lock.async { self.scan(tasks, active: active) } }
             }
         }
+    }
+
+    private func scan(_ tasks: [URLSessionTask], active: Bool) {
+        var waiting = Set<String>()
+        for t in tasks where t.state == .running || t.state == .suspended {
+            let p = describe(t)
+            if active || Date().timeIntervalSince1970 - p.at > 6 * 3600 {
+                inFlight.remove(p.name)
+                t.cancel() // app ouverte : on reprend l'envoi nous-mêmes au lieu d'attendre qu'iOS le décide
+            } else { waiting.insert(p.name) }
+        }
+        let fallback = UserDefaults.standard.string(forKey: "uploadURL").flatMap { URL(string: $0) }
+        for file in queued() where !waiting.contains(file.lastPathComponent) && !inFlight.contains(file.lastPathComponent) {
+            let name = file.lastPathComponent
+            let meta = (try? JSONSerialization.jsonObject(with: Data(contentsOf: infoURL(file)))) as? [String: String] ?? [:]
+            guard let target = freshTarget(meta["url"].flatMap { URL(string: $0) }, fallback) else { errors[name] = "ouvre l'app avec du réseau"; continue }
+            let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            if size == 0 { keep(file.path, in: "Vides"); continue }
+            inFlight.insert(name)
+            send(file: file, to: target, course: meta["course"] ?? "", name: meta["name"], mime: meta["mime"], via: active ? live : session)
+        }
+        scanning = false
+        if rescan { rescan = false; resumePending() }
+    }
+
+    /// Le lien gardé avec un vieux fichier peut avoir changé : adresse à jour, avec la matière et le cours du fichier.
+    private func freshTarget(_ own: URL?, _ latest: URL?) -> URL? {
+        guard let own else { return latest }
+        guard let latest, var c = URLComponents(url: latest, resolvingAgainstBaseURL: false) else { return own }
+        c.percentEncodedQuery = URLComponents(url: own, resolvingAgainstBaseURL: false)?.percentEncodedQuery
+        return c.url
+    }
+
+    /// Les anciens « Non envoyés » repartent dans la file : le serveur ignore ceux qu'il a déjà.
+    /// Seulement les enregistrements : un document refusé a perdu sa matière, il reste à repartager.
+    private func requeueRefused() {
+        let fm = FileManager.default
+        for f in (try? fm.contentsOfDirectory(at: Uploader.folder("Non envoyés"), includingPropertiesForKeys: nil)) ?? [] where f.pathExtension.lowercased() == "m4a" {
+            let dest = Uploader.outbox.appendingPathComponent(f.lastPathComponent)
+            if !fm.fileExists(atPath: dest.path) { try? fm.moveItem(at: f, to: dest) }
+        }
+    }
+
+    /// L'app passe en arrière-plan : les envois en cours sont confiés à iOS, qui les termine.
+    func handOver() {
+        var bg = UIBackgroundTaskIdentifier.invalid
+        let end = { if bg != .invalid { UIApplication.shared.endBackgroundTask(bg); bg = .invalid } }
+        bg = UIApplication.shared.beginBackgroundTask(withName: "envoi") { end() }
+        live.getAllTasks { tasks in
+            tasks.forEach { $0.cancel() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                self.resumePending()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5) { end() }
+            }
+        }
+    }
+
+    // « chemin|cours|date d'envoi ». Seul le NOM compte : le chemin de l'app change quand SideStore la réinstalle.
+    private func describe(_ t: URLSessionTask) -> (name: String, course: String, at: Double) {
+        let p = (t.taskDescription ?? "").components(separatedBy: "|")
+        return (URL(fileURLWithPath: p.first ?? "").lastPathComponent, p.count > 1 ? p[1] : "", p.count > 2 ? Double(p[2]) ?? 0 : 0)
     }
 
     func queued() -> [URL] {
@@ -77,23 +159,24 @@ final class Uploader: NSObject, URLSessionDataDelegate {
 
     /// Pour l'app : ce qui attend encore sur le téléphone.
     func pendingList(_ done: @escaping ([[String: Any]]) -> Void) {
-        session.getAllTasks { tasks in
-            let busy = Set(tasks.filter { $0.state == .running }.compactMap { $0.taskDescription?.components(separatedBy: "|").first })
+        lock.async {
             let fm = FileManager.default
-            let size = { (f: URL) in (try? f.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0 }
-            var items: [[String: Any]] = self.queued().map { f in ["name": f.deletingPathExtension().lastPathComponent, "size": size(f), "sending": busy.contains(f.path)] }
+            let size = { (f: URL) -> Int in (try? f.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0 }
+            var items: [[String: Any]] = []
+            for f in self.queued() {
+                let n = f.lastPathComponent
+                items.append(["name": f.deletingPathExtension().lastPathComponent, "size": size(f), "sending": self.inFlight.contains(n),
+                              "progress": self.progress[n] ?? 0, "error": self.errors[n] ?? ""])
+            }
             for dir in (try? fm.contentsOfDirectory(at: Recorder.root, includingPropertiesForKeys: nil)) ?? [] where dir.hasDirectoryPath {
                 let parts = ((try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.fileSizeKey])) ?? []).filter { $0.pathExtension == "m4a" }
                 if !parts.isEmpty { items.append(["name": dir.lastPathComponent + " (à assembler)", "size": parts.map(size).reduce(0, +), "sending": false]) }
-            }
-            for f in (try? fm.contentsOfDirectory(at: Uploader.folder("Non envoyés"), includingPropertiesForKeys: [.fileSizeKey])) ?? [] where f.pathExtension != "json" {
-                items.append(["name": f.deletingPathExtension().lastPathComponent + " (refusé, gardé)", "size": size(f), "sending": false])
             }
             done(items)
         }
     }
 
-    private func send(file: URL, to target: URL, course: String, name: String? = nil, mime: String? = nil) {
+    private func send(file: URL, to target: URL, course: String, name: String? = nil, mime: String? = nil, via: URLSession) {
         var req = URLRequest(url: target)
         req.httpMethod = "POST"
         req.setValue(mime ?? "audio/x-m4a", forHTTPHeaderField: "Content-Type")
@@ -105,8 +188,9 @@ final class Uploader: NSObject, URLSessionDataDelegate {
         } else {
             req.setValue(file.deletingPathExtension().lastPathComponent, forHTTPHeaderField: "x-name")
         }
-        let task = session.uploadTask(with: req, fromFile: file)
-        task.taskDescription = "\(file.path)|\(course)"
+        let task = via.uploadTask(with: req, fromFile: file)
+        let label = course.replacingOccurrences(of: "|", with: " ")
+        task.taskDescription = "\(file.path)|\(label)|\(Date().timeIntervalSince1970)"
         task.resume()
     }
 
@@ -114,26 +198,52 @@ final class Uploader: NSObject, URLSessionDataDelegate {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
+    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
+        let name = describe(task).name
+        lock.async { self.progress[name] = totalBytesExpectedToSend > 0 ? Double(totalBytesSent) / Double(totalBytesExpectedToSend) : 0 }
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        lock.async { self.bodies[dataTask, default: Data()].append(data.prefix(2000)) }
+    }
+
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        let parts = (task.taskDescription ?? "").components(separatedBy: "|")
-        let path = parts.first ?? "", course = parts.count > 1 ? parts[1] : ""
+        lock.async { self.finished(task, error, isLive: session === self.live) }
+    }
+
+    private func finished(_ task: URLSessionTask, _ error: Error?, isLive: Bool) {
+        let (name, course, _) = describe(task)
+        let path = Uploader.outbox.appendingPathComponent(name).path
         let status = (task.response as? HTTPURLResponse)?.statusCode ?? 0
+        let reply = bodies.removeValue(forKey: task) ?? Data()
+        let cancelled = (error as? URLError)?.code == .cancelled
+        if cancelled && !isLive { return } // repris par l'envoi direct (déjà marqué en cours)
+        inFlight.remove(name)
+        progress[name] = nil
         if error == nil && (200..<300).contains(status) {
+            errors[name] = nil
+            tries[name] = nil
             // Reçu par le serveur : copie de sécurité gardée 5 jours (dossier « Envoyés »), documents supprimés
-            if path.hasSuffix(".m4a") { keep(path, in: "Envoyés") } else {
-                try? FileManager.default.removeItem(atPath: path)
-                try? FileManager.default.removeItem(at: infoURL(URL(fileURLWithPath: path)))
-            }
             if path.hasSuffix(".m4a") {
+                try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: path) // 5 jours à partir de l'envoi
+                keep(path, in: "Envoyés")
                 notify("Enregistrement envoyé", "\(course.isEmpty ? "Ton cours" : course) — transcription et fiche automatiques")
             } else {
+                try? FileManager.default.removeItem(atPath: path)
+                try? FileManager.default.removeItem(at: infoURL(URL(fileURLWithPath: path)))
                 notify("Document ajouté", "Rangé dans \(course)")
             }
-        } else if status == 400 { // refusé (vide ?) : plus renvoyé, mais gardé — on n'efface jamais un enregistrement sans copie
-            keep(path, in: "Non envoyés")
-            notify("Enregistrement refusé par le serveur", "Gardé sur l'iPhone : Fichiers › ECAM › Non envoyés")
-        } else if (error as? URLError)?.code != .cancelled {
-            notify("Envoi pas encore fait", "L'enregistrement est gardé sur l'iPhone : il sera renvoyé automatiquement à la prochaine ouverture de l'app.")
+        } else if !cancelled {
+            // Quelle que soit l'erreur (refus compris), le fichier reste dans la file et sera réessayé
+            let said = ((try? JSONSerialization.jsonObject(with: reply)) as? [String: Any])?["error"] as? String
+            let why = error?.localizedDescription ?? "serveur : \(said ?? "erreur") (\(status))"
+            errors[name] = why
+            let n = (tries[name] ?? 0) + 1
+            tries[name] = n
+            if n == 3 { notify("Envoi pas encore fait", "\(why) — l'enregistrement est gardé sur l'iPhone et sera réessayé.") }
+            // 10 s, 20 s, 40 s… puis toutes les 10 min tant que l'app tourne, et à chaque ouverture
+            let wait = min(600, 5 * pow(2, Double(min(n, 8))))
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) { self.resumePending() }
         }
     }
 

@@ -23,6 +23,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         Uploader.shared.resumePending()
     }
 
+    func applicationDidEnterBackground(_ application: UIApplication) {
+        Uploader.shared.handOver()
+    }
+
     // Fermée depuis le sélecteur d'apps pendant un enregistrement : on finalise la tranche en cours (fichier lisible),
     // l'envoi se fera à la prochaine ouverture
     func applicationWillTerminate(_ application: UIApplication) {

@@ -154,17 +154,20 @@ final class Recorder: NSObject {
         let done = { finalizing.remove(folder.path); UIApplication.shared.endBackgroundTask(task) }
 
         let sendParts = { // repli : les tranches une par une
+            var moved = true
             for (i, p) in parts.enumerated() {
                 let dest = Uploader.outbox.appendingPathComponent("\(folder.lastPathComponent) partie \(i + 1).m4a")
-                try? fm.moveItem(at: p, to: dest)
+                guard (try? fm.moveItem(at: p, to: dest)) != nil else { moved = false; continue }
                 Uploader.shared.enqueue(file: dest, course: course, url: url)
             }
-            try? fm.removeItem(at: folder)
+            if moved { try? fm.removeItem(at: folder) }
         }
         if parts.count == 1 {
-            try? fm.moveItem(at: parts[0], to: out)
-            Uploader.shared.enqueue(file: out, course: course, url: url)
-            try? fm.removeItem(at: folder)
+            // déplacement raté : le dossier est gardé tel quel, repris à la prochaine ouverture
+            if (try? fm.moveItem(at: parts[0], to: out)) != nil {
+                Uploader.shared.enqueue(file: out, course: course, url: url)
+                try? fm.removeItem(at: folder)
+            }
             done()
             return
         }
